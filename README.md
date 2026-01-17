@@ -233,27 +233,6 @@ The protocol uses the `fleet.update-proto.token` key in metadata. Invitations ar
 
 Other supported message types include `INPROGRESS`, `CANCELED`, `DONE`, `ERROR`, and `ASKAGAIN`.
 
-#### Manual Testing
-
-You can manually trigger an invitation using `pvr`:
-
-```bash
-# Set invitation in user-meta
-pvr dev set $DEVICE_ID fleet.update-proto.token='{
-   "#spec": "fleet-update-proto@v1",
-   "type": "INVITE",
-   "deployment": "my-deployment",
-   "release": "my-release",
-   "mandatory": "false"
-}'
-```
-
-The device's response can be verified in device-meta:
-```bash
-# Get device-meta answer
-pvcontrol devmeta save fleet.update-proto.token ...
-```
-
 ## Architecture
 
 This project follows a multi-threaded, message-based architecture designed for scalability and testability.
