@@ -152,14 +152,24 @@ pantavisor-mocker start --storage my_storage
 
 ### Interactive Updates
 
-When the mocker receives an update from Pantahub, it will proceed through the `DOWNLOADING` and `INPROGRESS` states. Once it reaches `TESTING`, it will pause and prompt for user input:
+When the mocker receives an update from Pantahub, it will proceed through the DOWNLOADING and INPROGRESS states. Once it reaches the TESTING phase, the process will pause and prompt for a manual decision via the terminal:
 
-```text
-INPUT REQUIRED: Press 'p' to PASS or 'f' to FAIL the update (10s timeout defaults to PASS):
+```
+UPDATE DECISION REQUIRED
+An update cycle is in TESTING phase.
+Select Outcome:
+[U]PDATED  - Success (Immediate)
+[D]ONE     - Success (Reboot)
+[E]RROR    - Simulate Failure
+[W]ONTGO   - Reject Update
+
 ```
 
-- Press **`p`** (or wait) to simulate a successful update (`DONE`).
-- Press **`f`** to simulate a failure, triggering a rollback (`ERROR` -> Rollback).
+Available Decisions:
+u (UPDATED): Simulates an immediate successful update.
+d (DONE): Marks the update as successful, typically following a simulated reboot.
+e (ERROR): Simulates a failure, triggering the rollback mechanism.
+w (WONTGO): Rejects the update entirely.
 
 ### Fleet Invitations
 
@@ -254,5 +264,3 @@ This project follows a multi-threaded, message-based architecture designed for s
   - **Logger**: Handles log buffering, file I/O, and cloud uploads.
   - **Background Job (Mocker)**: Handles core business logic (sync, updates, invitations).
 - **Communication**: Subsystems communicate via JSON messages over IPC.
-
-For detailed architectural documentation, refer to `plan.md`.
