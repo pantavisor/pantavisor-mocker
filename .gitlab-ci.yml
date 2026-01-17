@@ -1,0 +1,28 @@
+image: docker:27.3.1-cli # Use a modern client
+services:
+    - name: docker:27.3.1-dind # Use a matching server
+      alias: docker
+
+stages:
+    - build
+
+variables:
+    CONTAINER_IMAGE: registry.gitlab.com/$CI_PROJECT_PATH
+    DOCKER_DRIVER: overlay2
+    GIT_SUBMODULE_STRATEGY: recursive
+    IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+
+build_image:
+    stage: build
+    image: docker:latest
+    services:
+        - docker:dind
+    before_script:
+        - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    script:
+        - docker build -t $IMAGE_TAG .
+        - docker push $IMAGE_TAG
+    only:
+        - master
+        - main
+        - tags
