@@ -7,4 +7,5 @@ test {
     _ = @import("meta_tests.zig");
     _ = @import("update_flow_tests.zig");
     _ = @import("validation_tests.zig");
+    _ = @import("app");
 }
