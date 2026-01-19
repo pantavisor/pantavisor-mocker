@@ -81,6 +81,27 @@ Once installed or added to your PATH, you can use the `pantavisor-mocker` comman
 
 ### Docker Usage
 
+You can run the mocker using the pre-built Docker image from the GitHub Container Registry.
+
+#### 1. Initialize Storage with Docker
+```bash
+docker run -it -v ${PWD}/storage:/app/storage \
+	--name pantavisor \
+	ghcr.io/pantacor/pantavisor-mocker:main \
+	init --token YOUR_AUTO_TOKEN_HERE
+```
+
+#### 2. Run the Mocker with Docker
+```bash
+docker run -it \
+	-v ${PWD}/storage:/app/storage \
+	--name pantavisor \
+	ghcr.io/pantacor/pantavisor-mocker:main \
+ start
+```
+
+### Docker Usage (GitLab Registry)
+
 You can also run the mocker using the pre-built Docker image from the GitLab Container Registry.
 
 #### 1. Initialize Storage with Docker
