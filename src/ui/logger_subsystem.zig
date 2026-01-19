@@ -46,10 +46,10 @@ pub const LoggerSubsystem = struct {
         self.quit_flag.store(true, .release);
         if (self.upload_thread) |t| t.join();
         if (self.flush_thread) |t| t.join();
-        
+
         // Final flush
         self.flushBuffer() catch {};
-        
+
         std.posix.shutdown(self.ipc_client.stream.handle, .both) catch {};
         self.ipc_client.deinit();
         self.store.deinit();

@@ -52,6 +52,8 @@ fn app_main(allocator: std.mem.Allocator, args: []const []const u8) !void {
     var is_debug = false;
     var use_tui = true;
     var init_token: ?[]const u8 = null;
+    var ph_host: ?[]const u8 = null;
+    var ph_port: ?[]const u8 = null;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -78,6 +80,22 @@ fn app_main(allocator: std.mem.Allocator, args: []const []const u8) !void {
                 std.debug.print("Error: Missing argument for {s}\n", .{args[i]});
                 return error.InvalidArgs;
             }
+        } else if (std.mem.eql(u8, args[i], "--host")) {
+            if (i + 1 < args.len) {
+                ph_host = args[i + 1];
+                i += 1;
+            } else {
+                std.debug.print("Error: Missing argument for {s}\n", .{args[i]});
+                return error.InvalidArgs;
+            }
+        } else if (std.mem.eql(u8, args[i], "--port")) {
+            if (i + 1 < args.len) {
+                ph_port = args[i + 1];
+                i += 1;
+            } else {
+                std.debug.print("Error: Missing argument for {s}\n", .{args[i]});
+                return error.InvalidArgs;
+            }
         } else if (std.mem.eql(u8, args[i], "--one-shot")) {
             is_one_shot = true;
         } else if (std.mem.eql(u8, args[i], "--debug")) {
@@ -94,6 +112,14 @@ fn app_main(allocator: std.mem.Allocator, args: []const []const u8) !void {
     if (is_init) {
         var store = try local_store.LocalStore.init(allocator, storage_path, init_token, true);
         defer store.deinit();
+
+        if (ph_host) |host| {
+            try store.save_config_value("PH_CREDS_HOST", host);
+        }
+        if (ph_port) |port| {
+            try store.save_config_value("PH_CREDS_PORT", port);
+        }
+
         std.debug.print("Storage initialized at {s}\n", .{storage_path});
         return;
     }
@@ -135,7 +161,7 @@ fn app_main(allocator: std.mem.Allocator, args: []const []const u8) !void {
                     if (q.load(.acquire)) return;
                     std.Thread.sleep(100 * std.time.ns_per_ms);
                 }
-                
+
                 if (!q.load(.acquire)) {
                     // Try to send stop message to renderer
                     if (ipc.IpcClient.init(alloc, socket_path, .core)) |mut_client| {
@@ -149,14 +175,14 @@ fn app_main(allocator: std.mem.Allocator, args: []const []const u8) !void {
                 }
             }
         }.run;
-        watchdog_thread = try std.Thread.spawn(.{}, watchdog, .{&mocker.quit_flag, socket_path_str, allocator});
+        watchdog_thread = try std.Thread.spawn(.{}, watchdog, .{ &mocker.quit_flag, socket_path_str, allocator });
     }
     defer if (watchdog_thread) |t| t.join();
 
     // 4. Start Renderer (Depends on Router)
     if (use_tui) {
         var renderer = try tui_renderer.TuiRenderer.init(allocator, &mocker.quit_flag);
-        
+
         // Retry connection loop
         var connected = false;
         var attempts: usize = 0;
@@ -173,11 +199,11 @@ fn app_main(allocator: std.mem.Allocator, args: []const []const u8) !void {
         if (!connected) return error.ConnectionFailed;
 
         try renderer.run();
-        
+
         renderer.deinit();
     } else {
         var renderer = try stdinout_renderer.StdInOutRenderer.init(allocator, &mocker.quit_flag);
-        
+
         // Retry connection loop
         var connected = false;
         var attempts: usize = 0;
@@ -196,20 +222,20 @@ fn app_main(allocator: std.mem.Allocator, args: []const []const u8) !void {
         while (!mocker.quit_flag.load(.acquire)) {
             std.Thread.sleep(100 * std.time.ns_per_ms);
         }
-        
+
         renderer.deinit();
     }
 
     // Cleanup phase
     mocker.quit_flag.store(true, .release);
-    
+
     // Wake up Router from accept()
     {
         const dummy = std.net.connectUnixSocket(socket_path_str) catch null;
         if (dummy) |c| c.close();
     }
     router_thread.join();
-    
+
     bg_thread.join();
     log_sub.deinit();
     log_thread.join();
@@ -230,6 +256,8 @@ const help_text =
     "  -h, --help           Show this help message and exit.\n" ++
     "  -s, --storage PATH   Path to the storage directory (default: \"storage\").\n" ++
     "  -t, --token TOKEN    Factory autotoken for registration (used with init).\n" ++
+    "  --host HOST          Set Pantahub API host (used with init).\n" ++
+    "  --port PORT          Set Pantahub API port (used with init).\n" ++
     "  --one-shot           Run a single cycle of the main loop and exit (useful for testing).\n" ++
     "  --debug              Enable debug logging.\n" ++
     "  --no-tui             Disable TUI mode.\n";

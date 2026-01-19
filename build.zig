@@ -19,7 +19,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.addImport("vaxis", vaxis_mod);
-    
+
     exe.addCSourceFile(.{ .file = b.path("src/net/curl_shim.c") });
     exe.linkLibC();
     exe.linkSystemLibrary("curl");

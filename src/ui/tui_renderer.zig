@@ -93,18 +93,18 @@ pub const TuiRenderer = struct {
 
     pub fn deinit(self: *TuiRenderer) void {
         self.quit_flag.store(true, .release);
-        
+
         if (self.ipc_client) |*c| {
             std.posix.shutdown(c.stream.handle, .both) catch {};
         }
-        
+
         if (self.ipc_thread) |t| t.join();
         self.vx.exitAltScreen(self.tty.writer()) catch {};
         self.loop.stop();
-        
+
         // Drain pending events
         while (self.loop.tryEvent()) |event| {
-             event.deinit(self.allocator);
+            event.deinit(self.allocator);
         }
 
         self.vx.deinit(self.allocator, self.tty.writer());

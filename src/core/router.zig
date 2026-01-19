@@ -135,14 +135,15 @@ pub const Router = struct {
         if (renderer_ok and logger_ok) {
             if (self.subsystems.get(.background_job)) |stream| {
                 const bg_status = self.subsystem_status.get(.background_job) orelse .unknown;
-                                 if (bg_status == .registered) { 
-                                     const start_msg = Message{ .from = .core, .to = .background_job, .type = .subsystem_start };
-                                     const json = try start_msg.serialize(self.allocator);
-                                     defer self.allocator.free(json);
-                                     _ = stream.write(json) catch {};
-                                     
-                                     try self.subsystem_status.put(.background_job, .running);
-                                 }            }
+                if (bg_status == .registered) {
+                    const start_msg = Message{ .from = .core, .to = .background_job, .type = .subsystem_start };
+                    const json = try start_msg.serialize(self.allocator);
+                    defer self.allocator.free(json);
+                    _ = stream.write(json) catch {};
+
+                    try self.subsystem_status.put(.background_job, .running);
+                }
+            }
         }
     }
 

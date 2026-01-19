@@ -91,8 +91,6 @@ pub const OVMODE_STATUS_KEY = "ovmode_status";
 /// OTA mode status value: operation completed successfully
 pub const OVMODE_STATUS_COMPLETED = "completed";
 
-
-
 // Progress Values
 pub const PROGRESS_QUEUED = 0;
 pub const PROGRESS_DOWNLOADING = 10;

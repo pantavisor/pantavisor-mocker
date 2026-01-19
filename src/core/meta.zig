@@ -150,10 +150,10 @@ pub const Meta = struct {
         log.log("Pushing metadata to cloud...", .{});
         self.sendProgress(ipc_client, 30, "Pushing device-meta...");
         try self.sync_device_meta(cli, store, log, prn, ipc_client);
-        
+
         self.sendProgress(ipc_client, 60, "Fetching user-meta...");
         try self.sync_user_meta(cli, store, log, prn, ipc_client);
-        
+
         self.sendProgress(ipc_client, 100, "Sync complete");
     }
 
