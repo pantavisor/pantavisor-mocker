@@ -1,6 +1,6 @@
 const std = @import("std");
 const curl_mod = @import("curl.zig");
-const logger_mod = @import("../ui/logger.zig");
+const logger_mod = @import("../core/logger.zig");
 const validation = @import("../core/validation.zig");
 const constants = @import("../core/constants.zig");
 const business_logic = @import("../core/business_logic.zig");

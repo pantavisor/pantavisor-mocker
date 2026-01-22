@@ -4,16 +4,16 @@ pub const cli_app = @import("cli/app.zig");
 
 // Backwards compatibility exports for tests
 pub const core_mocker = @import("core/mocker.zig");
-pub const local_store = @import("storage/local_store.zig");
+pub const local_store = @import("core/local_store.zig");
 pub const constants = @import("core/constants.zig");
 pub const tui_renderer = @import("ui/tui_renderer.zig");
 pub const stdinout_renderer = @import("ui/stdinout_renderer.zig");
-pub const logger_subsystem = @import("ui/logger_subsystem.zig");
+pub const logger_subsystem = @import("core/logger_subsystem.zig");
 pub const router_mod = @import("core/router.zig");
 
 // Backwards compatibility for tests
 pub const config = @import("core/config.zig");
-pub const logger = @import("ui/logger.zig");
+pub const logger = @import("core/logger.zig");
 pub const update_flow = @import("flows/update_flow.zig");
 pub const client_mod = @import("net/client.zig");
 pub const meta_mod = @import("core/meta.zig");

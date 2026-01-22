@@ -1,7 +1,7 @@
 const std = @import("std");
-const messages = @import("../core/messages.zig");
-const ipc = @import("../core/ipc.zig");
-const local_store = @import("../storage/local_store.zig");
+const messages = @import("messages.zig");
+const ipc = @import("ipc.zig");
+const local_store = @import("local_store.zig");
 const client_mod = @import("../net/client.zig");
 const log_pusher = @import("../net/log_pusher.zig");
 

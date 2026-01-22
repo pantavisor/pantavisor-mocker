@@ -1,9 +1,9 @@
 const std = @import("std");
 const client = @import("../net/client.zig");
-const local_store = @import("../storage/local_store.zig");
-const logger = @import("../ui/logger.zig");
+const local_store = @import("local_store.zig");
+const logger = @import("logger.zig");
 const config = @import("config.zig");
-const sys_info = @import("../system/sys_info.zig");
+const sys_info = @import("sys_info.zig");
 const ipc = @import("ipc.zig");
 const messages = @import("messages.zig");
 

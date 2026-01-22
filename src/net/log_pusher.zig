@@ -1,7 +1,7 @@
 const std = @import("std");
 const client_mod = @import("client.zig");
-const local_store = @import("../storage/local_store.zig");
-const logger_mod = @import("../ui/logger.zig");
+const local_store = @import("../core/local_store.zig");
+const logger_mod = @import("../core/logger.zig");
 
 pub fn push_logs(allocator: std.mem.Allocator, client: *client_mod.Client, store: *local_store.LocalStore, log: anytype) !void {
     if (client.token == null) return;

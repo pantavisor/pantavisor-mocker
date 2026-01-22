@@ -1,7 +1,7 @@
 const std = @import("std");
 const client_mod = @import("../net/client.zig");
-const local_store = @import("../storage/local_store.zig");
-const logger_mod = @import("../ui/logger.zig");
+const local_store = @import("../core/local_store.zig");
+const logger_mod = @import("../core/logger.zig");
 const config_mod = @import("../core/config.zig");
 const meta_mod = @import("../core/meta.zig");
 

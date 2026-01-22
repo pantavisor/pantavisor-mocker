@@ -1,6 +1,6 @@
 const std = @import("std");
 const constants = @import("../core/constants.zig");
-const local_store = @import("../storage/local_store.zig");
+const local_store = @import("../core/local_store.zig");
 
 pub const InitCmd = struct {
     token: ?[]const u8 = null,

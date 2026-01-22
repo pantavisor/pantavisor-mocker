@@ -1,5 +1,5 @@
 const std = @import("std");
-const local_store = @import("../storage/local_store.zig");
+const local_store = @import("local_store.zig");
 
 pub const Config = struct {
     allocator: std.mem.Allocator,
