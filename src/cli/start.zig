@@ -132,5 +132,8 @@ pub const StartCmd = struct {
 };
 
 fn mocker_run_wrapper(mocker: *core_mocker.Mocker) void {
-    mocker.runBackground() catch {};
+    mocker.runBackground() catch |err| {
+        std.debug.print("Background task failed: {any}\n", .{err});
+        mocker.quit_flag.store(true, .release);
+    };
 }

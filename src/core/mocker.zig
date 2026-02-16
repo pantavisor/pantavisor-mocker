@@ -496,6 +496,16 @@ fn check_and_process_claim(
     cfg: *config.Config,
 ) !void {
     if (!cfg.is_claimed and cfg.creds_prn != null) {
+        if (cfg.creds_prn) |prn| {
+            if (std.mem.lastIndexOf(u8, prn, "/")) |idx| {
+                if (idx + 1 < prn.len) {
+                    log.log("Device ID: {s}", .{prn[idx + 1 ..]});
+                }
+            }
+        }
+        if (cfg.creds_challenge) |challenge| {
+            log.log("Challenge: {s}", .{challenge});
+        }
         log.log("Device not claimed. Polling status...", .{});
         const device_info_res = ph_client.get_device_info(cfg.creds_prn.?) catch |err| blk: {
             log.log("Failed to get device info: {any}", .{err});
@@ -559,6 +569,11 @@ fn ensure_registered_and_logged_in(
             cfg.factory_autotok,
         );
         log.log("Device registered. PRN: {s}", .{creds.prn});
+        if (std.mem.lastIndexOf(u8, creds.prn, "/")) |idx| {
+            if (idx + 1 < creds.prn.len) {
+                log.log("Device ID: {s}", .{creds.prn[idx + 1 ..]});
+            }
+        }
         if (creds.challenge) |c| {
             log.log("Challenge received: {s}", .{c});
         }
@@ -580,7 +595,11 @@ fn ensure_registered_and_logged_in(
 
         log.log("Logging in to bootstrap cloud state...", .{});
         try ph_client.login(creds.prn, creds.secret);
-        log.log("Login successful. Token: {s}", .{ph_client.token.?});
+        if (log.debug_mode) {
+            log.log("Login successful. Token: {s}", .{ph_client.token.?});
+        } else {
+            log.log("Login successful. Token: (OBFUSCATED)", .{});
+        }
 
         // Send cloud config to logger subsystem
         if (log.ipc_client) |client| {

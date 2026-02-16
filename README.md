@@ -254,6 +254,215 @@ The protocol uses the `fleet.update-proto.token` key in metadata. Invitations ar
 
 Other supported message types include `INPROGRESS`, `CANCELED`, `DONE`, `ERROR`, and `ASKAGAIN`.
 
+## Swarm Mode (Fleet Simulation)
+
+Swarm mode lets you generate and manage large fleets of simulated devices from a single workspace. It replaces the `pvmocks` bash script with native Zig subcommands under `pantavisor-mocker swarm`.
+
+### Quick Start
+
+```bash
+# 1. Create a workspace with template config files
+pantavisor-mocker swarm init --dir my-fleet
+
+# 2. Edit config files (set your real token, adjust channels/models)
+cd my-fleet
+vim autojointoken.txt
+
+# 3. Generate devices and/or appliances
+pantavisor-mocker swarm generate-devices --count 10
+pantavisor-mocker swarm generate-appliances --count 5
+
+# 4. Check what was generated
+pantavisor-mocker swarm status
+
+# 5. Launch all mockers in tmux sessions
+pantavisor-mocker swarm simulate
+
+# 6. Clean up when done
+pantavisor-mocker swarm clean --target all
+```
+
+### Swarm Commands
+
+#### `swarm init [--dir <dir>]`
+
+Creates a workspace directory with template configuration files. Existing files are never overwritten.
+
+```bash
+pantavisor-mocker swarm init --dir my-fleet
+```
+
+Generated template files:
+
+| File | Purpose |
+|------|---------|
+| `autojointoken.txt` | Pantahub auto-join token for device registration |
+| `group_key.txt` | Metadata key used to group devices (default: `pantavisor.uname.node.name`) |
+| `base.json` | Base device metadata applied to all generated devices |
+| `channels.json` | Channel definitions with channel-specific metadata overlays |
+| `models.txt` | Hardware model names (one per line) |
+| `to_random_keys.txt` | Metadata keys that should receive random numeric values |
+
+Also creates empty `appliances/` and `devices/` directories.
+
+#### `swarm generate-devices --count <N> [--dir <dir>] [--host <host>] [--port <port>]`
+
+Generates `N` generic simulated devices. Each device gets:
+- A random 8-character hex ID
+- A `mocker` service directory with standard `pantahub.config` and `mocker.json`
+- Merged device metadata from `base.json` + random keys + group key
+
+```bash
+pantavisor-mocker swarm generate-devices --count 50 --host api.pantahub.com --port 443
+```
+
+Directory structure:
+```
+devices/
+  a1b2c3d4/
+    mocker/
+      config/
+        pantahub.config
+        mocker.json
+      ...
+```
+
+#### `swarm generate-appliances --count <N> [--dir <dir>] [--host <host>] [--port <port>]`
+
+Generates `N` appliances **per channel** defined in `channels.json`. Each appliance gets a subdirectory for every model in `models.txt`.
+
+For example, with 2 channels and 2 models, `--count 3` creates `2 × 3 × 2 = 12` mocker instances.
+
+```bash
+pantavisor-mocker swarm generate-appliances --count 3
+```
+
+Directory structure:
+```
+appliances/
+  FRIDGE0001/
+    a1b2c3d4/
+      OrangePi_3_LTS/
+        config/
+          pantahub.config
+          mocker.json
+      Raspberry_Pi_3_Model_B_Plus_Rev_1.4/
+        config/
+          ...
+```
+
+Each `mocker.json` contains merged metadata from `base.json` + channel overlay + random values + group key + model name.
+
+#### `swarm simulate [--dir <dir>]`
+
+Scans the workspace for all generated `mocker.json` files and launches each one in a separate tmux session.
+
+```bash
+pantavisor-mocker swarm simulate
+```
+
+Presents an interactive menu:
+```
+==========================================
+   Pantavisor Mocker Simulation Manager
+==========================================
+#   | Tmux Session                        | Path
+----|------------------------------------|---------------------------------
+0   | a1b2c3d4_mocker                     | [RUNNING] devices/a1b2c3d4/mocker
+1   | e5f6a7b8_OrangePi_3_LTS             | [RUNNING] appliances/OrangePi/e5f6a7b8/OrangePi_3_LTS
+------------------------------------------
+Enter index number or session name to attach.
+q to Quit (terminates all)
+==========================================
+Select >
+```
+
+- Enter a number or session name to attach to a tmux session
+- Press `Ctrl+B` then `D` to detach and return to the menu
+- Press `q` to quit and terminate all sessions
+
+**Requires**: `tmux` must be installed.
+
+#### `swarm status [--dir <dir>]`
+
+Shows the current workspace status: number of generated mockers and config file presence.
+
+```bash
+pantavisor-mocker swarm status
+```
+
+```
+swarm workspace status
+========================
+Appliance mockers: 12
+Device mockers:    50
+
+Config files:
+  [OK] autojointoken.txt
+  [OK] group_key.txt
+  [OK] base.json
+  [OK] channels.json
+  [OK] models.txt
+  [OK] to_random_keys.txt
+```
+
+#### `swarm clean [--target <appliances|devices|all>] [--dir <dir>]`
+
+Removes generated device/appliance directories. Config template files are preserved.
+
+```bash
+# Remove only devices
+pantavisor-mocker swarm clean --target devices
+
+# Remove only appliances
+pantavisor-mocker swarm clean --target appliances
+
+# Remove everything (default)
+pantavisor-mocker swarm clean --target all
+```
+
+### Workspace Configuration Files
+
+#### `base.json`
+
+Base metadata applied to **all** generated devices and appliances:
+
+```json
+{
+  "pantavisor.arch": "aarch64/64/EL",
+  "pantavisor.uname.kernel.name": "Linux",
+  "pantavisor.uname.machine": "aarch64"
+}
+```
+
+#### `channels.json`
+
+Defines named channels with metadata overlays. Used by `generate-appliances`:
+
+```json
+{
+  "FRIDGE0001": {
+    "pantavisor.appliance.serialnumber": "FRIDGE0001"
+  }
+}
+```
+
+#### `to_random_keys.txt`
+
+Metadata keys listed here receive a unique random numeric value per device/appliance:
+
+```
+pvmoks.random_key
+```
+
+#### `group_key.txt`
+
+The metadata key whose value is set to the device/appliance hex ID, useful for grouping:
+
+```
+pantavisor.uname.node.name
+```
+
 ## Architecture
 
 This project follows a multi-threaded, message-based architecture designed for scalability and testability.

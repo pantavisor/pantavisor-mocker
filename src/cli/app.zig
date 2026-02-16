@@ -2,15 +2,18 @@ const std = @import("std");
 pub const framework = @import("framework.zig");
 const init_mod = @import("init.zig");
 const start_mod = @import("start.zig");
+const swarm_mod = @import("swarm.zig");
 
 // --- Command Definitions ---
 
 pub const InitCmd = init_mod.InitCmd;
 pub const StartCmd = start_mod.StartCmd;
+pub const SwarmCmd = swarm_mod.SwarmCmd;
 
 pub const Cli = union(enum) {
     init: InitCmd,
     start: StartCmd,
+    swarm: SwarmCmd,
 
     pub const meta = .{
         .description = "Pantavisor Mocker - Device simulation tool",

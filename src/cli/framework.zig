@@ -30,7 +30,10 @@ pub fn parse(allocator: std.mem.Allocator, comptime T: type, args: []const []con
     // If it's a union, we expect a subcommand
     switch (@typeInfo(T)) {
         .@"union" => |u_info| {
-            if (args.len == 0) return error.NoCommandProvided;
+            if (args.len == 0) {
+                try printHelp(T, null);
+                return error.HelpRequested;
+            }
             const cmd_name = args[0];
             const remaining_args = args[1..];
 
@@ -90,9 +93,25 @@ pub fn parse(allocator: std.mem.Allocator, comptime T: type, args: []const []con
                                 }
                                 @field(result, field.name) = args[i + 1];
                                 i += 1;
+                            } else if (@typeInfo(field.type) == .int or
+                                (@typeInfo(field.type) == .optional and @typeInfo(@typeInfo(field.type).optional.child) == .int))
+                            {
+                                if (i + 1 >= args.len) {
+                                    std.debug.print("Error: Missing argument for {s}\n", .{arg});
+                                    return error.MissingArgument;
+                                }
+                                const IntType = if (@typeInfo(field.type) == .optional)
+                                    @typeInfo(field.type).optional.child
+                                else
+                                    field.type;
+                                const parsed = std.fmt.parseInt(IntType, args[i + 1], 10) catch {
+                                    std.debug.print("Error: Invalid integer value '{s}' for {s}\n", .{ args[i + 1], arg });
+                                    return error.InvalidArgument;
+                                };
+                                @field(result, field.name) = parsed;
+                                i += 1;
                             } else {
-                                // Support other types? Ints?
-                                // For now, simple strings/bools
+                                @compileError("Unsupported field type for CLI parsing: " ++ field.name);
                             }
                         }
                     }
