@@ -4,6 +4,7 @@ services:
       alias: docker
 
 stages:
+    - test
     - build
 
 variables:
@@ -11,6 +12,16 @@ variables:
     DOCKER_DRIVER: overlay2
     GIT_SUBMODULE_STRATEGY: recursive
     IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+
+test:
+    stage: test
+    image: ziglang/zig:0.15.2
+    script:
+        - zig build test
+    only:
+        - master
+        - main
+        - merge_requests
 
 build_image:
     stage: build

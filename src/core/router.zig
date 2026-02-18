@@ -62,9 +62,15 @@ pub const Router = struct {
         while (!self.quit_flag.load(.acquire)) {
             const conn = server.accept() catch continue;
 
-            const thread = try std.Thread.spawn(.{}, handleConnection, .{ self, conn.stream });
+            const thread = try std.Thread.spawn(.{}, handleConnectionWrapper, .{ self, conn.stream });
             thread.detach();
         }
+    }
+
+    fn handleConnectionWrapper(self: *Router, stream: std.net.Stream) void {
+        handleConnection(self, stream) catch |err| {
+            std.log.err("Router connection handler error: {}", .{err});
+        };
     }
 
     fn handleConnection(self: *Router, stream: std.net.Stream) !void {
@@ -85,6 +91,7 @@ pub const Router = struct {
             const msg = parsed.value;
             if (msg.type == .subsystem_init and msg.to == .core) {
                 self.subsystems_mutex.lock();
+                defer self.subsystems_mutex.unlock();
                 try self.subsystems.put(msg.from, stream);
                 try self.subsystem_status.put(msg.from, .registered);
 
@@ -92,8 +99,6 @@ pub const Router = struct {
                 if (msg.from == .background_job) {
                     try self.checkAndStartBackgroundJob();
                 }
-
-                self.subsystems_mutex.unlock();
 
                 const resp = Message{
                     .from = .core,

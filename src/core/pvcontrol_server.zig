@@ -4,6 +4,7 @@ const local_store = @import("local_store.zig");
 const config = @import("config.zig");
 const constants = @import("constants.zig");
 const logger = @import("logger.zig");
+const validation = @import("validation.zig");
 
 const ContainerInfo = struct {
     name: []const u8,
@@ -112,19 +113,69 @@ pub const PvControlServer = struct {
                 continue;
             };
 
-            const thread = try std.Thread.spawn(.{}, handleConnection, .{ self, conn.stream });
+            const thread = try std.Thread.spawn(.{}, handleConnectionWrapper, .{ self, conn.stream });
             thread.detach();
         }
+    }
+
+    fn handleConnectionWrapper(self: *PvControlServer, stream: std.net.Stream) void {
+        handleConnection(self, stream) catch |err| {
+            std.log.err("PvControl connection handler error: {}", .{err});
+        };
     }
 
     fn handleConnection(self: *PvControlServer, stream: std.net.Stream) !void {
         defer stream.close();
 
-        var buf: [16384]u8 = undefined;
-        const n = try stream.read(&buf);
-        if (n == 0) return;
+        // Read headers first
+        var buf: [65536]u8 = undefined;
+        var total_read: usize = 0;
+        var headers_end: ?usize = null;
 
-        var request = http_parser.parseRequest(self.allocator, buf[0..n]) catch {
+        // Read until we find the end of headers (\r\n\r\n)
+        while (total_read < buf.len) {
+            const n = try stream.read(buf[total_read..]);
+            if (n == 0) return; // Connection closed
+            total_read += n;
+
+            // Check for end of headers
+            if (total_read >= 4) {
+                const data = buf[0..total_read];
+                if (std.mem.indexOf(u8, data, "\r\n\r\n")) |end| {
+                    headers_end = end + 4;
+                    break;
+                }
+            }
+        }
+
+        if (headers_end == null) return; // Headers too large or malformed
+
+        // Parse Content-Length if present
+        var content_length: ?usize = null;
+        const headers_data = buf[0..headers_end.?];
+        if (std.mem.indexOf(u8, headers_data, "Content-Length:")) |cl_start| {
+            const after_cl = headers_data[cl_start + 15 ..];
+            if (std.mem.indexOf(u8, after_cl, "\r\n")) |cl_end| {
+                const cl_str = std.mem.trim(u8, after_cl[0..cl_end], " \t");
+                content_length = std.fmt.parseInt(usize, cl_str, 10) catch null;
+            }
+        }
+
+        // Read body if Content-Length is specified
+        if (content_length) |cl| {
+            const body_start = headers_end.?;
+            if (cl > buf.len - body_start) return; // Body too large
+            var body_received = total_read - body_start;
+
+            while (body_received < cl) {
+                const n = try stream.read(buf[total_read..]);
+                if (n == 0) return; // Connection closed before full body
+                total_read += n;
+                body_received += n;
+            }
+        }
+
+        var request = http_parser.parseRequest(self.allocator, buf[0..total_read]) catch {
             var resp = http_parser.HttpResponse{
                 .status_code = 400,
                 .status_text = "Bad Request",
@@ -359,6 +410,16 @@ pub const PvControlServer = struct {
 
     fn handleDeviceMeta(self: *PvControlServer, req: http_parser.HttpRequest) !http_parser.HttpResponse {
         const key = if (req.path.len > "/device-meta/".len) req.path["/device-meta/".len..] else "";
+        if (key.len > 0) {
+            validation.validate_file_path(key) catch {
+                return http_parser.HttpResponse{
+                    .status_code = 400,
+                    .status_text = "Bad Request",
+                    .content_type = "text/plain",
+                    .body = try self.allocator.dupe(u8, "Invalid key"),
+                };
+            };
+        }
         const meta_dir = try std.fs.path.join(self.allocator, &[_][]const u8{ self.context.storage_path, "device-meta" });
         defer self.allocator.free(meta_dir);
 
@@ -412,6 +473,16 @@ pub const PvControlServer = struct {
 
     fn handleUserMeta(self: *PvControlServer, req: http_parser.HttpRequest) !http_parser.HttpResponse {
         const key = if (req.path.len > "/user-meta/".len) req.path["/user-meta/".len..] else "";
+        if (key.len > 0) {
+            validation.validate_file_path(key) catch {
+                return http_parser.HttpResponse{
+                    .status_code = 400,
+                    .status_text = "Bad Request",
+                    .content_type = "text/plain",
+                    .body = try self.allocator.dupe(u8, "Invalid key"),
+                };
+            };
+        }
         const meta_dir = try std.fs.path.join(self.allocator, &[_][]const u8{ self.context.storage_path, "user-meta" });
         defer self.allocator.free(meta_dir);
 
@@ -469,6 +540,16 @@ pub const PvControlServer = struct {
 
     fn handleObjects(self: *PvControlServer, req: http_parser.HttpRequest) !http_parser.HttpResponse {
         const sha = if (req.path.len > "/objects/".len) req.path["/objects/".len..] else "";
+        if (sha.len > 0) {
+            validation.validate_sha256(sha) catch {
+                return http_parser.HttpResponse{
+                    .status_code = 400,
+                    .status_text = "Bad Request",
+                    .content_type = "text/plain",
+                    .body = try self.allocator.dupe(u8, "Invalid SHA256"),
+                };
+            };
+        }
         const objects_dir = try std.fs.path.join(self.allocator, &[_][]const u8{ self.context.storage_path, "objects" });
         defer self.allocator.free(objects_dir);
 

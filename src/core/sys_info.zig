@@ -152,8 +152,9 @@ pub fn get_dtmodel(allocator: std.mem.Allocator) ![]const u8 {
     const content = try file.readToEndAlloc(allocator, 1024);
     std.debug.assert(content.len > 0);
     const trimmed = std.mem.trimRight(u8, content, "\x00\n\r ");
+    const result = try allocator.dupe(u8, trimmed);
     allocator.free(content);
-    return allocator.dupe(u8, trimmed);
+    return result;
 }
 
 pub fn get_interfaces(allocator: std.mem.Allocator) ![]const u8 {

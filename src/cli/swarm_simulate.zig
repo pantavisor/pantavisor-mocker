@@ -2,24 +2,24 @@ const std = @import("std");
 
 // Module-level state for signal handler cleanup
 var g_session_names: []const []const u8 = &.{};
-var g_cleanup_done: bool = false;
+var g_cleanup_requested = std.atomic.Value(bool).init(false);
+var g_cleanup_done = std.atomic.Value(bool).init(false);
 
-fn killAllSessions() void {
-    if (g_cleanup_done) return;
-    g_cleanup_done = true;
+fn killAllSessions(allocator: std.mem.Allocator) void {
+    if (g_cleanup_done.load(.acquire)) return;
+    g_cleanup_done.store(true, .release);
 
-    std.debug.print("\nStopping all mocker sessions...\n", .{});
+    std.log.info("Stopping all mocker sessions...", .{});
     for (g_session_names) |name| {
-        // Use low-level fork+exec since we may be in a signal context
-        var child = std.process.Child.init(&.{ "tmux", "kill-session", "-t", name }, std.heap.page_allocator);
+        var child = std.process.Child.init(&.{ "tmux", "kill-session", "-t", name }, allocator);
         _ = child.spawnAndWait() catch continue;
-        std.debug.print("Killed tmux session: {s}\n", .{name});
+        std.log.info("Killed tmux session: {s}", .{name});
     }
 }
 
 fn sigintHandler(_: c_int) callconv(.c) void {
-    killAllSessions();
-    std.posix.exit(0);
+    // Only set atomic flag - all actual work done in main thread
+    g_cleanup_requested.store(true, .release);
 }
 
 pub const SwarmSimulateCmd = struct {
@@ -134,7 +134,8 @@ pub const SwarmSimulateCmd = struct {
             name_ptrs[i] = s.name;
         }
         g_session_names = name_ptrs;
-        g_cleanup_done = false;
+        g_cleanup_requested.store(false, .release);
+        g_cleanup_done.store(false, .release);
 
         // Install SIGINT and SIGTERM handlers
         var sa: std.posix.Sigaction = .{
@@ -169,6 +170,12 @@ pub const SwarmSimulateCmd = struct {
         const stdin_file = std.fs.File.stdin();
 
         while (true) {
+            // Check for signal-triggered cleanup request
+            if (g_cleanup_requested.load(.acquire)) {
+                std.log.info("Signal received, cleaning up...", .{});
+                break;
+            }
+
             // Show menu
             std.debug.print("\n==========================================\n", .{});
             std.debug.print("   Pantavisor Mocker Simulation Manager   \n", .{});
@@ -238,8 +245,8 @@ pub const SwarmSimulateCmd = struct {
             }
         }
 
-        // Normal exit cleanup (q or EOF)
-        killAllSessions();
+        // Normal exit cleanup (q, EOF, or signal)
+        killAllSessions(allocator);
     }
 
     fn readLine(file: std.fs.File, buf: []u8) ?[]const u8 {

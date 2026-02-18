@@ -180,7 +180,8 @@ pub const Client = struct {
                 }
             }
 
-            if (b.len > 0) {
+            // Only log debug body if not sensitive
+            if (b.len > 0 and !is_sensitive) {
                 self.log_debug("HTTP Body (Full): {s}", .{b});
             }
         }
@@ -216,7 +217,14 @@ pub const Client = struct {
         const url = try std.fmt.allocPrint(self.allocator, "{s}://{s}:{s}{s}", .{ self.getScheme(), self.pantahub_host, self.pantahub_port, "/auth/login" });
         defer self.allocator.free(url);
 
-        const payload = try std.fmt.allocPrint(self.allocator, "{{\"username\":\"{s}\",\"password\":\"{s}\"}}", .{ prn, secret });
+        // Build JSON safely using std.json.fmt to prevent injection
+        const LoginPayload = struct {
+            username: []const u8,
+            password: []const u8,
+        };
+        const payload_struct = LoginPayload{ .username = prn, .password = secret };
+
+        const payload = try std.fmt.allocPrint(self.allocator, "{f}", .{std.json.fmt(payload_struct, .{})});
         defer self.allocator.free(payload);
 
         const headers = [_]std.http.Header{.{ .name = "Content-Type", .value = "application/json" }};
