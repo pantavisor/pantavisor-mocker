@@ -101,27 +101,6 @@ docker run -it \
  start
 ```
 
-### Docker Usage (GitLab Registry)
-
-You can also run the mocker using the pre-built Docker image from the GitLab Container Registry.
-
-#### 1. Initialize Storage with Docker
-```bash
-docker run -it -v ${PWD}/storage:/app/storage \
-	--name pantavisor \
-	registry.gitlab.com/pantacor/pantavisor-runtime/pantavisor-mocker:main \
-	init --token YOUR_AUTO_TOKEN_HERE
-```
-
-#### 2. Run the Mocker with Docker
-```bash
-docker run -it \
-	-v ${PWD}/storage:/app/storage \
-	--name pantavisor \
-	registry.gitlab.com/pantacor/pantavisor-runtime/pantavisor-mocker:main \
- start
-```
-
 ## Build and Installation
 
 ### Prerequisites
