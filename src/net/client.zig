@@ -783,7 +783,7 @@ pub const Client = struct {
             .{ .name = "Content-Type", .value = "application/json" },
             .{ .name = "Authorization", .value = auth_val },
         };
-        const res = try self.request("PUT", url, meta_json, &headers);
+        const res = try self.request("PATCH", url, meta_json, &headers);
         std.debug.assert(res.len >= 0);
         self.allocator.free(res);
     }

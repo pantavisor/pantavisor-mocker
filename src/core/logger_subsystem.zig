@@ -161,6 +161,7 @@ pub const LoggerSubsystem = struct {
             if (self.current_rev) |r| self.allocator.free(r);
 
             self.current_rev = try self.allocator.dupe(u8, rev);
+            try self.store.init_log_dir(rev);
             const path = try self.store.get_log_path(rev);
             defer self.allocator.free(path);
 

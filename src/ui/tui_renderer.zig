@@ -15,6 +15,7 @@ pub const TuiRenderer = struct {
     ipc_client: ?ipc.IpcClient = null,
     ipc_thread: ?std.Thread = null,
     quit_flag: *std.atomic.Value(bool),
+    render_mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, quit_flag: *std.atomic.Value(bool)) !*TuiRenderer {
         const self = try allocator.create(TuiRenderer);
@@ -35,6 +36,7 @@ pub const TuiRenderer = struct {
             .arena = std.heap.ArenaAllocator.init(allocator),
             .ipc_client = null,
             .quit_flag = quit_flag,
+            .render_mutex = .{},
         };
 
         try self.loop.init();
@@ -156,6 +158,8 @@ pub const TuiRenderer = struct {
                             const p = data.object.get("percentage");
                             const d = data.object.get("details");
                             if (p != null and d != null and p.? == .integer and d.? == .string) {
+                                self.render_mutex.lock();
+                                defer self.render_mutex.unlock();
                                 const prog = tui.Progress{
                                     .status = self.allocator.dupe(u8, "SYNCING") catch continue,
                                     .progress = @intCast(p.?.integer),
@@ -168,9 +172,13 @@ pub const TuiRenderer = struct {
                     }
                 },
                 .update_required => {
+                    self.render_mutex.lock();
+                    defer self.render_mutex.unlock();
                     self.loop.postEvent(.update_prompt);
                 },
                 .subsystem_stop => {
+                    self.render_mutex.lock();
+                    defer self.render_mutex.unlock();
                     self.loop.postEvent(.quit);
                 },
                 else => {},
@@ -179,11 +187,15 @@ pub const TuiRenderer = struct {
     }
 
     fn render_log_internal(self: *TuiRenderer, msg: messages.LogData) !void {
+        self.render_mutex.lock();
+        defer self.render_mutex.unlock();
         const owned_msg = try self.allocator.dupe(u8, msg.message);
         self.loop.postEvent(.{ .log_message = .{ .message = owned_msg, .timestamp = msg.timestamp } });
     }
 
     fn render_invite_internal(self: *TuiRenderer, data: messages.InvitationData) !void {
+        self.render_mutex.lock();
+        defer self.render_mutex.unlock();
         self.loop.postEvent(.{ .invitation = .{
             .id = try self.allocator.dupe(u8, data.id),
             .description = try self.allocator.dupe(u8, data.description),
@@ -274,6 +286,8 @@ pub const TuiRenderer = struct {
                 .quit => self.state.should_quit = true,
                 else => {},
             }
+            self.render_mutex.lock();
+            defer self.render_mutex.unlock();
             try tui.render(&self.vx, &self.state, self.arena.allocator());
             try self.vx.render(self.tty.writer());
         }
