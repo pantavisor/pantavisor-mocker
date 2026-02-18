@@ -329,12 +329,19 @@ Generated template files:
 
 Also creates empty `appliances/` and `devices/` directories.
 
-#### `swarm generate-devices --count <N> [--dir <dir>] [--host <host>] [--port <port>]`
+#### `swarm generate-devices --count <N> [options]`
 
 Generates `N` generic simulated devices. Each device gets:
 - A random 8-character hex ID
 - A `mocker` service directory with standard `pantahub.config` and `mocker.json`
 - Merged device metadata from `base.json` + random keys + group key
+
+**Options:**
+- `-n, --count <N>`: Number of devices to generate (required)
+- `-d, --dir <dir>`: Output directory (default: `devices`)
+- `-w, --workspace <dir>`: Workspace directory containing config files (default: `.`)
+- `--host <host>`: Pantahub API host (default: `api.pantahub.com`)
+- `--port <port>`: Pantahub API port (default: `443`)
 
 ```bash
 pantavisor-mocker swarm generate-devices --count 50 --host api.pantahub.com --port 443
@@ -351,11 +358,18 @@ devices/
       ...
 ```
 
-#### `swarm generate-appliances --count <N> [--dir <dir>] [--host <host>] [--port <port>]`
+#### `swarm generate-appliances --count <N> [options]`
 
 Generates `N` appliances **per channel** defined in `channels.json`. Each appliance gets a subdirectory for every model in `models.txt`.
 
 For example, with 2 channels and 2 models, `--count 3` creates `2 × 3 × 2 = 12` mocker instances.
+
+**Options:**
+- `-n, --count <N>`: Number of appliances per channel (required)
+- `-d, --dir <dir>`: Output directory (default: `appliances`)
+- `-w, --workspace <dir>`: Workspace directory containing config files (default: `.`)
+- `--host <host>`: Pantahub API host (default: `api.pantahub.com`)
+- `--port <port>`: Pantahub API port (default: `443`)
 
 ```bash
 pantavisor-mocker swarm generate-appliances --count 3
@@ -476,7 +490,7 @@ Defines named channels with metadata overlays. Used by `generate-appliances`:
 Metadata keys listed here receive a unique random numeric value per device/appliance:
 
 ```
-pvmoks.random_key
+pvmocks.random_key
 ```
 
 #### `group_key.txt`
