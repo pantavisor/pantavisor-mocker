@@ -85,9 +85,10 @@ pub const TuiRenderer = struct {
         _ = state;
     }
 
-    fn get_user_input(ctx: *anyopaque, prompt: []const u8) anyerror![]u8 {
+    fn get_user_input(ctx: *anyopaque, prompt: []const u8, timeout_ms: ?u32) anyerror![]u8 {
         _ = ctx;
         _ = prompt;
+        _ = timeout_ms;
         return error.NotImplemented;
     }
 

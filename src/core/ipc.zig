@@ -61,12 +61,28 @@ pub const IpcClient = struct {
         return try Message.deserialize(self.allocator, line);
     }
 
-    pub fn get_user_input(self: *IpcClient, to: SubsystemId, prompt: []const u8) ![]u8 {
+    pub fn get_user_input(self: *IpcClient, to: SubsystemId, prompt: []const u8, timeout_ms: ?u32) ![]u8 {
         const data = std.json.Value{ .string = prompt };
         try self.sendMessage(to, .get_user_input, data);
 
+        const start_time = std.time.milliTimestamp();
+
         // Block until we get user_response
         while (true) {
+            if (timeout_ms) |t| {
+                const elapsed = std.time.milliTimestamp() - start_time;
+                if (elapsed >= t) return error.Timeout;
+
+                const remaining = t - @as(u32, @intCast(elapsed));
+                var fds = [1]std.posix.pollfd{.{
+                    .fd = self.stream.handle,
+                    .events = std.posix.POLL.IN,
+                    .revents = 0,
+                }};
+                const ready_count = try std.posix.poll(&fds, @intCast(remaining));
+                if (ready_count == 0) return error.Timeout;
+            }
+
             var parsed = try self.receiveMessage();
             defer parsed.deinit();
             const msg = parsed.value;

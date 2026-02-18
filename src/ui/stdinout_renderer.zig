@@ -70,10 +70,20 @@ pub const StdInOutRenderer = struct {
         std.debug.print("State Change: {s}\n", .{state});
     }
 
-    fn get_user_input(ctx: *anyopaque, prompt: []const u8) anyerror![]u8 {
+    fn get_user_input(ctx: *anyopaque, prompt: []const u8, timeout_ms: ?u32) anyerror![]u8 {
         const self: *StdInOutRenderer = @ptrCast(@alignCast(ctx));
         std.debug.print("{s}", .{prompt});
         const stdin = std.fs.File.stdin();
+
+        if (timeout_ms) |t| {
+            var fds = [1]std.posix.pollfd{.{
+                .fd = stdin.handle,
+                .events = std.posix.POLL.IN,
+                .revents = 0,
+            }};
+            const ready_count = try std.posix.poll(&fds, @intCast(t));
+            if (ready_count == 0) return error.Timeout;
+        }
 
         // Use simpler way to read from stdin
         var buf: [1024]u8 = undefined;
@@ -166,7 +176,7 @@ pub const StdInOutRenderer = struct {
     }
 
     fn handleInvitationInput(self: *StdInOutRenderer) void {
-        const input = get_user_input(self, "Decision: ") catch return;
+        const input = get_user_input(self, "Decision: ", null) catch return;
         defer self.allocator.free(input);
 
         var resp: ?[]const u8 = null;
@@ -195,7 +205,14 @@ pub const StdInOutRenderer = struct {
         std.debug.print("[E]RROR    - Simulate Failure\n", .{});
         std.debug.print("[W]ONTGO   - Reject Update\n", .{});
 
-        const input = get_user_input(self, "Action (10s timeout defaults to DONE): ") catch return;
+        const input = get_user_input(self, "Action (10s timeout defaults to DONE): ", 10000) catch |err| {
+            if (err == error.Timeout) {
+                if (self.ipc_client) |*client| {
+                    client.sendMessage(.background_job, .user_response, .{ .string = "done" }) catch {};
+                }
+            }
+            return;
+        };
         defer self.allocator.free(input);
 
         var resp: ?[]const u8 = null;

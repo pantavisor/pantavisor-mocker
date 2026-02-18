@@ -9,7 +9,7 @@ pub const Renderer = struct {
         render_update: *const fn (ctx: *anyopaque, data: std.json.Value) anyerror!void,
         render_invite: *const fn (ctx: *anyopaque, data: messages.InvitationData) anyerror!void,
         render_state_change: *const fn (ctx: *anyopaque, state: []const u8) anyerror!void,
-        get_user_input: *const fn (ctx: *anyopaque, prompt: []const u8) anyerror![]u8,
+        get_user_input: *const fn (ctx: *anyopaque, prompt: []const u8, timeout_ms: ?u32) anyerror![]u8,
         deinit: *const fn (ctx: *anyopaque) void,
     };
 
@@ -32,8 +32,8 @@ pub const Renderer = struct {
         try self.vtable.render_state_change(self.ptr, state);
     }
 
-    pub fn get_user_input(self: Renderer, prompt: []const u8) ![]u8 {
-        return try self.vtable.get_user_input(self.ptr, prompt);
+    pub fn get_user_input(self: Renderer, prompt: []const u8, timeout_ms: ?u32) ![]u8 {
+        return try self.vtable.get_user_input(self.ptr, prompt, timeout_ms);
     }
 
     pub fn deinit(self: Renderer) void {

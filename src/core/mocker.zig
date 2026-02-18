@@ -75,15 +75,14 @@ pub const Mocker = struct {
     pub fn deinit(self: *Mocker) void {
         self.quit_flag.store(true, .release);
         // Signal start condition to unblock if waiting
-        self.start_mutex.lock();
-        self.start_cond.signal();
-        self.start_mutex.unlock();
+        {
+            self.start_mutex.lock();
+            defer self.start_mutex.unlock();
+            self.start_cond.signal();
+        }
 
         if (self.router) |*r| {
-            // Wake up router from accept()
-            const socket_path = r.socket_path;
-            const dummy_conn = std.net.connectUnixSocket(socket_path) catch null;
-            if (dummy_conn) |c| c.close();
+            r.requestShutdown();
         }
         if (self.router_thread) |t| {
             t.join();
@@ -177,10 +176,12 @@ pub const Mocker = struct {
             const msg = parsed.value;
 
             if (msg.type == .subsystem_start) {
-                self.start_mutex.lock();
-                self.started = true;
-                self.start_cond.signal();
-                self.start_mutex.unlock();
+                {
+                    self.start_mutex.lock();
+                    defer self.start_mutex.unlock();
+                    self.started = true;
+                    self.start_cond.signal();
+                }
             } else if (msg.type == .user_response) {
                 // Handle user response
                 if (msg.data) |data| {
@@ -199,8 +200,8 @@ pub const Mocker = struct {
 
                         if (inv_resp) |ir| {
                             self.inv_response_mutex.lock();
+                            defer self.inv_response_mutex.unlock();
                             self.inv_response = ir;
-                            self.inv_response_mutex.unlock();
                         }
 
                         // Check if it's an update response
@@ -217,8 +218,8 @@ pub const Mocker = struct {
 
                         if (update_resp) |ur| {
                             self.update_response_mutex.lock();
+                            defer self.update_response_mutex.unlock();
                             self.update_response = ur;
-                            self.update_response_mutex.unlock();
                         }
                     }
                 }
@@ -249,10 +250,12 @@ pub const Mocker = struct {
         self.pvcontrol_server = try pvcontrol_server.PvControlServer.init(ctx.allocator, ctx.storage_path, ctx.quit_flag, ctx.is_debug, &log);
         try self.pvcontrol_server.?.start();
 
-        ctx.progress_mutex.lock();
-        if (ctx.try_rev_ptr.*) |p| ctx.allocator.free(p);
-        ctx.try_rev_ptr.* = try ctx.allocator.dupe(u8, revisions.try_rev);
-        ctx.progress_mutex.unlock();
+        {
+            ctx.progress_mutex.lock();
+            defer ctx.progress_mutex.unlock();
+            if (ctx.try_rev_ptr.*) |p| ctx.allocator.free(p);
+            ctx.try_rev_ptr.* = try ctx.allocator.dupe(u8, revisions.try_rev);
+        }
 
         log.log(
             "Pantavisor Mocker Starting... \nRevision: {s}\nTry Revision: {s}",
@@ -373,10 +376,12 @@ pub const Mocker = struct {
         // Check for TUI response to pending invitation
         if (pending_inv.*) |inv| {
             var response: ?tui.InvitationResponse = null;
-            ctx.inv_response_mutex.lock();
-            response = ctx.inv_response.*;
-            ctx.inv_response.* = null;
-            ctx.inv_response_mutex.unlock();
+            {
+                ctx.inv_response_mutex.lock();
+                defer ctx.inv_response_mutex.unlock();
+                response = ctx.inv_response.*;
+                ctx.inv_response.* = null;
+            }
 
             if (response) |resp| {
                 try invitation.process_answer(ctx.allocator, store, log, meta, cfg, inv, switch (resp) {
@@ -409,10 +414,12 @@ pub const Mocker = struct {
             ctx.allocator.free(new_revs.rev);
             ctx.allocator.free(new_revs.try_rev);
         }
-        ctx.progress_mutex.lock();
-        if (ctx.try_rev_ptr.*) |p| ctx.allocator.free(p);
-        ctx.try_rev_ptr.* = try ctx.allocator.dupe(u8, new_revs.try_rev);
-        ctx.progress_mutex.unlock();
+        {
+            ctx.progress_mutex.lock();
+            defer ctx.progress_mutex.unlock();
+            if (ctx.try_rev_ptr.*) |p| ctx.allocator.free(p);
+            ctx.try_rev_ptr.* = try ctx.allocator.dupe(u8, new_revs.try_rev);
+        }
     }
 
     fn sync_and_push(
@@ -448,10 +455,12 @@ pub const Mocker = struct {
             }
             if (pending_inv.*) |inv| {
                 var response: ?tui.InvitationResponse = null;
-                ctx.inv_response_mutex.lock();
-                response = ctx.inv_response.*;
-                if (response != null) ctx.inv_response.* = null;
-                ctx.inv_response_mutex.unlock();
+                {
+                    ctx.inv_response_mutex.lock();
+                    defer ctx.inv_response_mutex.unlock();
+                    response = ctx.inv_response.*;
+                    if (response != null) ctx.inv_response.* = null;
+                }
                 if (response) |resp| {
                     try invitation.process_answer(ctx.allocator, store, log, meta, cfg, inv, switch (resp) {
                         .accept => .accept,
@@ -475,11 +484,14 @@ fn ask_user_update_status(ctx_ptr: *const anyopaque) client_mod.UpdateStatus {
 
         // Block until we get a response
         const start_time = std.time.milliTimestamp();
-        while (std.time.milliTimestamp() - start_time < 10000) {
-            ctx.update_response_mutex.lock();
-            const resp = ctx.update_response.*;
-            if (resp != null) ctx.update_response.* = null;
-            ctx.update_response_mutex.unlock();
+        while (std.time.milliTimestamp() - start_time < constants.USER_RESPONSE_TIMEOUT_MS) {
+            var resp: ?tui.UpdateResponse = null;
+            {
+                ctx.update_response_mutex.lock();
+                defer ctx.update_response_mutex.unlock();
+                resp = ctx.update_response.*;
+                if (resp != null) ctx.update_response.* = null;
+            }
 
             if (resp) |r| {
                 return switch (r) {

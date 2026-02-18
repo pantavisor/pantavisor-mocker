@@ -18,6 +18,9 @@ pub const Router = struct {
     subsystem_status: std.AutoHashMap(SubsystemId, SubsystemStatus),
     subsystems_mutex: std.Thread.Mutex,
     quit_flag: *std.atomic.Value(bool),
+    active_connections: std.atomic.Value(usize),
+
+    const MAX_CONNECTIONS: usize = 16;
 
     pub fn init(allocator: std.mem.Allocator, socket_path: []const u8, quit_flag: *std.atomic.Value(bool)) !Router {
         return .{
@@ -27,6 +30,7 @@ pub const Router = struct {
             .subsystem_status = std.AutoHashMap(SubsystemId, SubsystemStatus).init(allocator),
             .subsystems_mutex = .{},
             .quit_flag = quit_flag,
+            .active_connections = std.atomic.Value(usize).init(0),
         };
     }
 
@@ -41,6 +45,13 @@ pub const Router = struct {
         self.subsystem_status.deinit();
         std.fs.cwd().deleteFile(self.socket_path) catch {};
         self.allocator.free(self.socket_path);
+    }
+
+    pub fn requestShutdown(self: *Router) void {
+        self.quit_flag.store(true, .release);
+        // Wake up blocking accept() by connecting to the socket
+        const dummy_conn = std.net.connectUnixSocket(self.socket_path) catch null;
+        if (dummy_conn) |c| c.close();
     }
 
     pub fn run(self: *Router) !void {
@@ -62,6 +73,13 @@ pub const Router = struct {
         while (!self.quit_flag.load(.acquire)) {
             const conn = server.accept() catch continue;
 
+            if (self.active_connections.load(.acquire) >= MAX_CONNECTIONS) {
+                std.log.warn("Router: connection limit reached ({}), rejecting new connection", .{MAX_CONNECTIONS});
+                conn.stream.close();
+                continue;
+            }
+
+            _ = self.active_connections.fetchAdd(1, .monotonic);
             const thread = try std.Thread.spawn(.{}, handleConnectionWrapper, .{ self, conn.stream });
             thread.detach();
         }
@@ -74,6 +92,7 @@ pub const Router = struct {
     }
 
     fn handleConnection(self: *Router, stream: std.net.Stream) !void {
+        defer _ = self.active_connections.fetchSub(1, .monotonic);
         var buf: [1024]u8 = undefined;
         var r = stream.reader(&buf);
         const reader = r.interface().adaptToOldInterface();
@@ -107,7 +126,9 @@ pub const Router = struct {
                 };
                 const json = try resp.serialize(self.allocator);
                 defer self.allocator.free(json);
-                _ = stream.write(json) catch {};
+                _ = stream.write(json) catch |err| {
+                    std.log.err("Router: failed to send response_ok to subsystem {s}: {}", .{ @tagName(msg.from), err });
+                };
                 continue;
             }
 
@@ -144,7 +165,9 @@ pub const Router = struct {
                     const start_msg = Message{ .from = .core, .to = .background_job, .type = .subsystem_start };
                     const json = try start_msg.serialize(self.allocator);
                     defer self.allocator.free(json);
-                    _ = stream.write(json) catch {};
+                    _ = stream.write(json) catch |err| {
+                        std.log.err("Router: failed to send subsystem_start to background_job: {}", .{err});
+                    };
 
                     try self.subsystem_status.put(.background_job, .running);
                 }
@@ -164,7 +187,9 @@ pub const Router = struct {
         if (self.subsystems.get(msg.to)) |stream| {
             const json = try msg.serialize(self.allocator);
             defer self.allocator.free(json);
-            _ = std.posix.send(stream.handle, json, std.posix.MSG.NOSIGNAL) catch {};
+            _ = std.posix.send(stream.handle, json, std.posix.MSG.NOSIGNAL) catch |err| {
+                std.log.err("Router: failed to send message to subsystem {s}: {}", .{ @tagName(msg.to), err });
+            };
         } else {
             // Target subsystem not found
         }

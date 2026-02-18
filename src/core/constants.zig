@@ -44,6 +44,8 @@ pub const DEFAULT_PANTAHUB_PORT = "443";
 /// Timeout for user invitation decision (10 seconds for UI response)
 /// Range: 1000-30000 ms (1-30 seconds)
 pub const INVITATION_DECISION_TIMEOUT_MS = 10000;
+/// Timeout for generic user response (10 seconds)
+pub const USER_RESPONSE_TIMEOUT_MS = 10000;
 /// Polling interval for progress file updates (1 second)
 /// Range: 100-5000 ms (prevents excessive I/O while staying responsive)
 pub const PROGRESS_CHECK_INTERVAL_MS = 1000;

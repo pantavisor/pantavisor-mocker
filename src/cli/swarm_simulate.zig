@@ -1,8 +1,11 @@
 const std = @import("std");
+const c = @cImport({
+    @cInclude("signal.h");
+    @cInclude("sys/signalfd.h");
+    @cInclude("unistd.h");
+});
 
-// Module-level state for signal handler cleanup
 var g_session_names: []const []const u8 = &.{};
-var g_cleanup_requested = std.atomic.Value(bool).init(false);
 var g_cleanup_done = std.atomic.Value(bool).init(false);
 
 fn killAllSessions(allocator: std.mem.Allocator) void {
@@ -17,11 +20,6 @@ fn killAllSessions(allocator: std.mem.Allocator) void {
     }
 }
 
-fn sigintHandler(_: c_int) callconv(.c) void {
-    // Only set atomic flag - all actual work done in main thread
-    g_cleanup_requested.store(true, .release);
-}
-
 pub const SwarmSimulateCmd = struct {
     dir: []const u8 = ".",
 
@@ -33,7 +31,6 @@ pub const SwarmSimulateCmd = struct {
     };
 
     pub fn run(self: @This(), allocator: std.mem.Allocator) !void {
-        // Find all mocker.json files in appliances/ and devices/
         var sessions = std.ArrayList(Session){};
         defer {
             for (sessions.items) |s| {
@@ -43,83 +40,79 @@ pub const SwarmSimulateCmd = struct {
             sessions.deinit(allocator);
         }
 
-        // Scan appliances and devices directories
-        const scan_dirs = [_][]const u8{ "appliances", "devices" };
-        for (scan_dirs) |sub_dir| {
-            var path_buf: [4096]u8 = undefined;
-            const scan_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ self.dir, sub_dir }) catch continue;
+        var root_dir = std.fs.cwd().openDir(self.dir, .{ .iterate = true }) catch |err| {
+            std.debug.print("Error opening directory '{s}': {}\n", .{ self.dir, err });
+            return;
+        };
+        defer root_dir.close();
 
-            var dir = std.fs.cwd().openDir(scan_path, .{ .iterate = true }) catch continue;
-            defer dir.close();
+        var walker = root_dir.walk(allocator) catch |err| {
+            std.debug.print("Error walking directory '{s}': {}\n", .{ self.dir, err });
+            return;
+        };
+        defer walker.deinit();
 
-            var walker = dir.walk(allocator) catch continue;
-            defer walker.deinit();
+        while (walker.next() catch null) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.eql(u8, entry.basename, "mocker.json")) continue;
+            if (std.mem.indexOf(u8, entry.path, "storage/") != null) continue;
 
-            while (walker.next() catch null) |entry| {
-                if (entry.kind != .file) continue;
-                if (!std.mem.eql(u8, entry.basename, "mocker.json")) continue;
-                // Skip storage subdirs
-                if (std.mem.indexOf(u8, entry.path, "storage/") != null) continue;
+            const config_dir = std.fs.path.dirname(entry.path) orelse continue;
+            const model_dir_rel = std.fs.path.dirname(config_dir) orelse continue;
 
-                // entry.path is relative to scan_path, e.g. "channel/id/model/config/mocker.json"
-                // We need the model dir (two levels up from mocker.json)
-                const config_dir = std.fs.path.dirname(entry.path) orelse continue;
-                const model_dir_rel = std.fs.path.dirname(config_dir) orelse continue;
+            var full_path_buf: [4096]u8 = undefined;
+            const model_dir_full = std.fmt.bufPrint(&full_path_buf, "{s}/{s}", .{ self.dir, model_dir_rel }) catch continue;
 
-                // Full path relative to workspace
-                var full_path_buf: [4096]u8 = undefined;
-                const model_dir_full = std.fmt.bufPrint(&full_path_buf, "{s}/{s}/{s}", .{ self.dir, sub_dir, model_dir_rel }) catch continue;
+            const model_name = std.fs.path.basename(model_dir_rel);
+            const parent_dir_rel = std.fs.path.dirname(model_dir_rel) orelse model_dir_rel;
+            const parent_name = std.fs.path.basename(parent_dir_rel);
 
-                // Build session name from path components
-                const model_name = std.fs.path.basename(model_dir_rel);
-                const parent_dir_rel = std.fs.path.dirname(model_dir_rel) orelse model_dir_rel;
-                const parent_name = std.fs.path.basename(parent_dir_rel);
+            var session_name_buf: [256]u8 = undefined;
+            const session_name = if (std.mem.eql(u8, parent_name, model_name))
+                try std.fmt.bufPrint(&session_name_buf, "{s}", .{model_name})
+            else
+                try std.fmt.bufPrint(&session_name_buf, "{s}_{s}", .{ parent_name, model_name });
 
-                var session_name_buf: [256]u8 = undefined;
-                const session_name = std.fmt.bufPrint(&session_name_buf, "{s}_{s}", .{ parent_name, model_name }) catch continue;
-
-                // Sanitize session name (replace spaces with underscores)
-                var sanitized: [256]u8 = undefined;
-                const slen = @min(session_name.len, sanitized.len);
-                for (0..slen) |j| {
-                    sanitized[j] = if (session_name[j] == ' ') '_' else session_name[j];
-                }
-
-                // Check for duplicate session names
-                var is_dup = false;
-                for (sessions.items) |existing| {
-                    if (std.mem.eql(u8, existing.name, sanitized[0..slen])) {
-                        is_dup = true;
-                        break;
-                    }
-                }
-
-                var final_name: []const u8 = undefined;
-                if (is_dup) {
-                    var dedup_buf: [280]u8 = undefined;
-                    var rand_bytes: [2]u8 = undefined;
-                    std.crypto.random.bytes(&rand_bytes);
-                    const hex = std.fmt.bytesToHex(rand_bytes, .lower);
-                    const dedup_name = std.fmt.bufPrint(&dedup_buf, "{s}_{s}", .{ sanitized[0..slen], &hex }) catch continue;
-                    final_name = allocator.dupe(u8, dedup_name) catch continue;
-                } else {
-                    final_name = allocator.dupe(u8, sanitized[0..slen]) catch continue;
-                }
-
-                const path_dupe = allocator.dupe(u8, model_dir_full) catch {
-                    allocator.free(final_name);
-                    continue;
-                };
-
-                sessions.append(allocator, .{
-                    .name = final_name,
-                    .path = path_dupe,
-                }) catch {
-                    allocator.free(final_name);
-                    allocator.free(path_dupe);
-                    continue;
-                };
+            var sanitized: [256]u8 = undefined;
+            const slen = @min(session_name.len, sanitized.len);
+            for (0..slen) |j| {
+                const ch = session_name[j];
+                sanitized[j] = if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_') ch else '_';
             }
+
+            var is_dup = false;
+            for (sessions.items) |existing| {
+                if (std.mem.eql(u8, existing.name, sanitized[0..slen])) {
+                    is_dup = true;
+                    break;
+                }
+            }
+
+            var final_name: []const u8 = undefined;
+            if (is_dup) {
+                var dedup_buf: [280]u8 = undefined;
+                var rand_bytes: [2]u8 = undefined;
+                std.crypto.random.bytes(&rand_bytes);
+                const hex = std.fmt.bytesToHex(rand_bytes, .lower);
+                const dedup_name = std.fmt.bufPrint(&dedup_buf, "{s}_{s}", .{ sanitized[0..slen], &hex }) catch continue;
+                final_name = allocator.dupe(u8, dedup_name) catch continue;
+            } else {
+                final_name = allocator.dupe(u8, sanitized[0..slen]) catch continue;
+            }
+
+            const path_dupe = allocator.dupe(u8, model_dir_full) catch {
+                allocator.free(final_name);
+                continue;
+            };
+
+            sessions.append(allocator, .{
+                .name = final_name,
+                .path = path_dupe,
+            }) catch {
+                allocator.free(final_name);
+                allocator.free(path_dupe);
+                continue;
+            };
         }
 
         if (sessions.items.len == 0) {
@@ -127,26 +120,27 @@ pub const SwarmSimulateCmd = struct {
             return;
         }
 
-        // Build a names-only slice for the signal handler
         var name_ptrs = try allocator.alloc([]const u8, sessions.items.len);
         defer allocator.free(name_ptrs);
         for (sessions.items, 0..) |s, i| {
             name_ptrs[i] = s.name;
         }
         g_session_names = name_ptrs;
-        g_cleanup_requested.store(false, .release);
         g_cleanup_done.store(false, .release);
 
-        // Install SIGINT and SIGTERM handlers
-        var sa: std.posix.Sigaction = .{
-            .handler = .{ .handler = sigintHandler },
-            .mask = @splat(0),
-            .flags = 0,
-        };
-        std.posix.sigaction(std.posix.SIG.INT, &sa, null);
-        std.posix.sigaction(std.posix.SIG.TERM, &sa, null);
+        var mask: c.sigset_t = undefined;
+        _ = c.sigemptyset(&mask);
+        _ = c.sigaddset(&mask, c.SIGINT);
+        _ = c.sigaddset(&mask, c.SIGTERM);
+        _ = c.pthread_sigmask(c.SIG_BLOCK, &mask, null);
 
-        // Launch tmux sessions
+        const signal_fd = c.signalfd(-1, &mask, c.SFD_CLOEXEC);
+        if (signal_fd == -1) {
+            std.debug.print("Error creating signalfd\n", .{});
+            return;
+        }
+        defer _ = c.close(signal_fd);
+
         for (sessions.items) |session| {
             std.debug.print("Starting simulation for: {s} (tmux: {s})\n", .{ session.path, session.name });
 
@@ -166,17 +160,9 @@ pub const SwarmSimulateCmd = struct {
 
         std.debug.print("\nStarted {d} simulation(s).\n", .{sessions.items.len});
 
-        // Interactive menu loop
         const stdin_file = std.fs.File.stdin();
 
         while (true) {
-            // Check for signal-triggered cleanup request
-            if (g_cleanup_requested.load(.acquire)) {
-                std.log.info("Signal received, cleaning up...", .{});
-                break;
-            }
-
-            // Show menu
             std.debug.print("\n==========================================\n", .{});
             std.debug.print("   Pantavisor Mocker Simulation Manager   \n", .{});
             std.debug.print("==========================================\n", .{});
@@ -184,7 +170,6 @@ pub const SwarmSimulateCmd = struct {
             std.debug.print("----|------------------------------------|---------------------------------\n", .{});
 
             for (sessions.items, 0..) |session, idx| {
-                // Check if session is still running
                 const status = blk: {
                     const check = std.process.Child.run(.{
                         .allocator = allocator,
@@ -206,20 +191,24 @@ pub const SwarmSimulateCmd = struct {
             std.debug.print("Select > ", .{});
 
             var input_buf: [256]u8 = undefined;
-            const choice = readLine(stdin_file, &input_buf) orelse break;
+            const choice = readLine(stdin_file, signal_fd, &input_buf) catch |err| {
+                if (err == error.SignalReceived) {
+                    std.log.info("Signal received, cleaning up...", .{});
+                    break;
+                }
+                break;
+            } orelse break;
 
             if (std.mem.eql(u8, choice, "q") or std.mem.eql(u8, choice, "Q")) {
                 break;
             }
 
-            // Try to match by index
             var target_session: ?[]const u8 = null;
             if (std.fmt.parseInt(usize, choice, 10)) |idx| {
                 if (idx < sessions.items.len) {
                     target_session = sessions.items[idx].name;
                 }
             } else |_| {
-                // Try to match by name
                 for (sessions.items) |session| {
                     if (std.mem.eql(u8, session.name, choice)) {
                         target_session = session.name;
@@ -233,7 +222,6 @@ pub const SwarmSimulateCmd = struct {
                 std.debug.print("Press Ctrl+B then D to detach and return to menu.\n", .{});
                 std.Thread.sleep(2 * std.time.ns_per_s);
 
-                // Use inherited stdio so tmux can take over the terminal
                 var child = std.process.Child.init(&.{ "tmux", "attach-session", "-t", name }, allocator);
                 _ = child.spawnAndWait() catch |err| {
                     std.debug.print("Error attaching to session: {}\n", .{err});
@@ -245,14 +233,37 @@ pub const SwarmSimulateCmd = struct {
             }
         }
 
-        // Normal exit cleanup (q, EOF, or signal)
         killAllSessions(allocator);
     }
 
-    fn readLine(file: std.fs.File, buf: []u8) ?[]const u8 {
+    fn readLine(file: std.fs.File, signal_fd: c_int, buf: []u8) !?[]const u8 {
         var pos: usize = 0;
         while (pos < buf.len) {
-            const n = file.read(buf[pos .. pos + 1]) catch return null;
+            var fds = [2]std.posix.pollfd{
+                .{
+                    .fd = file.handle,
+                    .events = std.posix.POLL.IN,
+                    .revents = 0,
+                },
+                .{
+                    .fd = signal_fd,
+                    .events = std.posix.POLL.IN,
+                    .revents = 0,
+                },
+            };
+
+            const ready = std.posix.poll(&fds, -1) catch |err| {
+                if (err == error.Interrupted) continue;
+                return err;
+            };
+
+            if (ready == 0) continue;
+
+            if (fds[1].revents != 0) {
+                return error.SignalReceived;
+            }
+
+            const n = try file.read(buf[pos .. pos + 1]);
             if (n == 0) return null;
             if (buf[pos] == '\n') {
                 return std.mem.trim(u8, buf[0..pos], " \t\r");

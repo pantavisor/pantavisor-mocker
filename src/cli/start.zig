@@ -6,6 +6,62 @@ const logger_subsystem = @import("../core/logger_subsystem.zig");
 const tui_renderer = @import("../ui/tui_renderer.zig");
 const stdinout_renderer = @import("../ui/stdinout_renderer.zig");
 const ipc = @import("../core/ipc.zig");
+const c = @cImport({
+    @cInclude("signal.h");
+    @cInclude("sys/signalfd.h");
+    @cInclude("unistd.h");
+    @cInclude("poll.h");
+});
+
+const SignalWatcher = struct {
+    thread: std.Thread,
+    quit_flag: *std.atomic.Value(bool),
+
+    fn init(quit_flag: *std.atomic.Value(bool)) !SignalWatcher {
+        // Block signals so the listener thread can catch them with signalfd
+        var mask: c.sigset_t = undefined;
+        _ = c.sigemptyset(&mask);
+        _ = c.sigaddset(&mask, c.SIGINT);
+        _ = c.sigaddset(&mask, c.SIGTERM);
+        _ = c.pthread_sigmask(c.SIG_BLOCK, &mask, null);
+
+        const thread = try std.Thread.spawn(.{}, run, .{quit_flag});
+        return .{ .thread = thread, .quit_flag = quit_flag };
+    }
+
+    fn run(quit_flag: *std.atomic.Value(bool)) void {
+        var mask: c.sigset_t = undefined;
+        _ = c.sigemptyset(&mask);
+        _ = c.sigaddset(&mask, c.SIGINT);
+        _ = c.sigaddset(&mask, c.SIGTERM);
+
+        const fd = c.signalfd(-1, &mask, c.SFD_CLOEXEC);
+        if (fd == -1) {
+            std.debug.print("SignalWatcher: failed to create signalfd\n", .{});
+            return;
+        }
+        defer _ = c.close(fd);
+
+        while (!quit_flag.load(.acquire)) {
+            var fds = [1]c.struct_pollfd{.{
+                .fd = fd,
+                .events = c.POLLIN,
+                .revents = 0,
+            }};
+            // Poll with timeout to allow checking quit_flag
+            const n = c.poll(&fds, 1, 500);
+            if (n > 0 and (fds[0].revents & c.POLLIN) != 0) {
+                // Signal received
+                quit_flag.store(true, .release);
+                return;
+            }
+        }
+    }
+
+    fn deinit(self: *SignalWatcher) void {
+        self.thread.join();
+    }
+};
 
 pub const StartCmd = struct {
     storage: []const u8 = constants.DEFAULT_STORAGE_PATH,
@@ -26,6 +82,13 @@ pub const StartCmd = struct {
     pub fn run(self: @This(), allocator: std.mem.Allocator) !void {
         var mocker = core_mocker.Mocker.init(allocator, self.storage, self.@"one-shot", self.debug);
         defer mocker.deinit();
+
+        // Signal handler for clean shutdown
+        var signal_watcher = SignalWatcher.init(&mocker.quit_flag) catch |err| {
+            std.debug.print("Failed to initialize SignalWatcher: {}\n", .{err});
+            return err;
+        };
+        defer signal_watcher.deinit();
 
         const socket_path_str = try std.fs.path.join(allocator, &[_][]const u8{ self.storage, "mocker.sock" });
         defer allocator.free(socket_path_str);
@@ -119,10 +182,7 @@ pub const StartCmd = struct {
         mocker.quit_flag.store(true, .release);
 
         // Wake up Router from accept()
-        {
-            const dummy = std.net.connectUnixSocket(socket_path_str) catch null;
-            if (dummy) |c| c.close();
-        }
+        router.requestShutdown();
         router_thread.join();
 
         bg_thread.join();
