@@ -88,7 +88,7 @@ You can run the mocker using the pre-built Docker image from the GitHub Containe
 ```bash
 docker run -it -v ${PWD}/storage:/app/storage \
 	--name pantavisor \
-	ghcr.io/pantacor/pantavisor-mocker:main \
+	ghcr.io/pantavisor/pantavisor-mocker:latest \
 	init --token YOUR_AUTO_TOKEN_HERE
 ```
 
@@ -97,7 +97,7 @@ docker run -it -v ${PWD}/storage:/app/storage \
 docker run -it \
 	-v ${PWD}/storage:/app/storage \
 	--name pantavisor \
-	ghcr.io/pantacor/pantavisor-mocker:main \
+	ghcr.io/pantavisor/pantavisor-mocker:latest \
  start
 ```
 
