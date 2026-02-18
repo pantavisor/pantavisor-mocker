@@ -28,6 +28,7 @@ Pantavisor Mocker specifically simulates the **Pantavisor Runtime** behavior reg
   - **Interactive Testing**: Allows manual User Acceptance Testing (UAT) during the `TESTING` phase via CLI (Pass/Fail).
   - **Robust Recovery**: Handles interrupted updates and implements immediate rollback on failure.
 - **Logging**: Captures and pushes logs to Pantahub.
+- **pvcontrol Server**: Provides a Unix domain socket server that implements the Pantavisor Control API, allowing container-side tools like `pvcontrol` to interact with the mocker.
 - **Fleet Invitation Protocol**: Simulates user consent flows (Accept/Skip) for managed fleet updates.
 - **TLS Ownership Validation**: Supports device ownership verification using client-side TLS certificates.
 
@@ -253,6 +254,50 @@ The protocol uses the `fleet.update-proto.token` key in metadata. Invitations ar
 ```
 
 Other supported message types include `INPROGRESS`, `CANCELED`, `DONE`, `ERROR`, and `ASKAGAIN`.
+
+## pvcontrol Server
+
+The mocker includes a built-in server that replicates the standard Pantavisor control socket (`pv-ctrl`). This allows you to use the standard `pvcontrol` script or any other tool that expects the Pantavisor Control API to interact with the simulated device.
+
+### Socket Location
+
+The control socket is created automatically when the mocker starts and is located at:
+`storage/pantavisor/pv-ctrl`
+
+### Usage with `pvcontrol`
+
+You can point the `pvcontrol` script to the mocker's socket using the `-s` option:
+
+```bash
+# List simulated containers
+./pvcontrol -s storage/pantavisor/pv-ctrl ls
+
+# List simulated groups
+./pvcontrol -s storage/pantavisor/pv-ctrl groups ls
+
+# View simulated device metadata
+./pvcontrol -s storage/pantavisor/pv-ctrl devmeta ls
+
+# View simulated configuration
+./pvcontrol -s storage/pantavisor/pv-ctrl conf ls
+
+# Send a signal
+./pvcontrol -s storage/pantavisor/pv-ctrl signal ready
+
+# Simulate a reboot
+./pvcontrol -s storage/pantavisor/pv-ctrl cmd reboot
+```
+
+### Supported Endpoints
+
+The server implements over 20 endpoints with JSON response signatures that are byte-compatible with a real Pantavisor device, including:
+- `GET /containers`, `GET /groups`
+- `POST /signal`, `POST /commands` (including reboot/poweroff simulation)
+- `GET/PUT/DELETE /device-meta`, `GET/PUT/DELETE /user-meta`
+- `GET /buildinfo`
+- `GET/PUT /objects`
+- `GET/PUT /steps`, `GET /steps/<rev>/progress`
+- `GET /config`, `GET /config2`
 
 ## Swarm Mode (Fleet Simulation)
 

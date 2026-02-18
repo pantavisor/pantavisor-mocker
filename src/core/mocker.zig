@@ -14,6 +14,7 @@ const business_logic = @import("business_logic.zig");
 const router_mod = @import("router.zig");
 const ipc = @import("ipc.zig");
 const messages = @import("messages.zig");
+pub const pvcontrol_server = @import("pvcontrol_server.zig");
 
 const boot_state = constants.BOOT_STATE_JSON;
 const boot_progress = constants.BOOT_PROGRESS_JSON;
@@ -43,6 +44,7 @@ pub const Mocker = struct {
     ipc_client: ?ipc.IpcClient = null,
     router_thread: ?std.Thread = null,
     ipc_thread: ?std.Thread = null,
+    pvcontrol_server: ?pvcontrol_server.PvControlServer = null,
 
     // Start synchronization
     start_mutex: std.Thread.Mutex = .{},
@@ -102,6 +104,10 @@ pub const Mocker = struct {
         if (self.ipc_client) |*c| {
             c.deinit();
             self.ipc_client = null;
+        }
+        if (self.pvcontrol_server) |*s| {
+            s.deinit();
+            self.pvcontrol_server = null;
         }
         if (self.try_rev_ptr) |ptr| {
             self.allocator.free(ptr);
@@ -230,11 +236,6 @@ pub const Mocker = struct {
             ctx.allocator.free(revisions.try_rev);
         }
 
-        ctx.progress_mutex.lock();
-        if (ctx.try_rev_ptr.*) |p| ctx.allocator.free(p);
-        ctx.try_rev_ptr.* = try ctx.allocator.dupe(u8, revisions.try_rev);
-        ctx.progress_mutex.unlock();
-
         try store.update_current_symlinks(revisions.try_rev);
         try store.init_log_dir(revisions.try_rev);
         const log_path = try store.get_log_path(revisions.try_rev);
@@ -244,6 +245,14 @@ pub const Mocker = struct {
         defer log.deinit();
         log.ipc_client = ctx.ipc_client;
         log.allocator = ctx.allocator;
+
+        self.pvcontrol_server = try pvcontrol_server.PvControlServer.init(ctx.allocator, ctx.storage_path, ctx.quit_flag, ctx.is_debug, &log);
+        try self.pvcontrol_server.?.start();
+
+        ctx.progress_mutex.lock();
+        if (ctx.try_rev_ptr.*) |p| ctx.allocator.free(p);
+        ctx.try_rev_ptr.* = try ctx.allocator.dupe(u8, revisions.try_rev);
+        ctx.progress_mutex.unlock();
 
         log.log(
             "Pantavisor Mocker Starting... \nRevision: {s}\nTry Revision: {s}",
