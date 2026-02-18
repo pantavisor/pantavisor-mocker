@@ -141,11 +141,14 @@ pub const SwarmSimulateCmd = struct {
         }
         defer _ = c.close(signal_fd);
 
+        const exe_path = try std.fs.selfExePathAlloc(allocator);
+        defer allocator.free(exe_path);
+
         for (sessions.items) |session| {
             std.debug.print("Starting simulation for: {s} (tmux: {s})\n", .{ session.path, session.name });
 
             var cmd_buf: [8192]u8 = undefined;
-            const cmd = std.fmt.bufPrint(&cmd_buf, "pantavisor-mocker start -s \"{s}\"", .{session.path}) catch continue;
+            const cmd = std.fmt.bufPrint(&cmd_buf, "\"{s}\" start -s \"{s}\"", .{ exe_path, session.path }) catch continue;
 
             const result = std.process.Child.run(.{
                 .allocator = allocator,

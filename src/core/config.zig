@@ -5,6 +5,7 @@ pub const Config = struct {
     allocator: std.mem.Allocator,
     pantahub_host: ?[]const u8,
     pantahub_port: ?[]const u8,
+    pantahub_use_https: bool = true,
     creds_id: ?[]const u8,
     creds_secret: ?[]const u8,
     creds_prn: ?[]const u8,
@@ -91,7 +92,16 @@ pub fn load(allocator: std.mem.Allocator, store: local_store.LocalStore, log: an
 
         if (std.mem.eql(u8, key, "PH_CREDS_HOST")) {
             if (cfg.pantahub_host) |v| allocator.free(v);
-            cfg.pantahub_host = try allocator.dupe(u8, trimmed_value);
+            // Strip scheme prefix (http:// or https://) if present
+            if (std.mem.startsWith(u8, trimmed_value, "https://")) {
+                cfg.pantahub_use_https = true;
+                cfg.pantahub_host = try allocator.dupe(u8, trimmed_value["https://".len..]);
+            } else if (std.mem.startsWith(u8, trimmed_value, "http://")) {
+                cfg.pantahub_use_https = false;
+                cfg.pantahub_host = try allocator.dupe(u8, trimmed_value["http://".len..]);
+            } else {
+                cfg.pantahub_host = try allocator.dupe(u8, trimmed_value);
+            }
         } else if (std.mem.eql(u8, key, "PH_CREDS_PORT")) {
             if (cfg.pantahub_port) |v| allocator.free(v);
             cfg.pantahub_port = try allocator.dupe(u8, trimmed_value);

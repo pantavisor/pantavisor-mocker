@@ -55,9 +55,9 @@ const Sha256Cache = struct {
 
         // Compute hash and cache it
         const hash = try compute_sha256(self.allocator, path);
+        errdefer self.allocator.free(hash);
         const path_copy = try self.allocator.dupe(u8, path);
         errdefer self.allocator.free(path_copy);
-        errdefer self.allocator.free(hash);
 
         try self.cache.put(path_copy, .{
             .hash = hash,

@@ -270,12 +270,14 @@ pub const Mocker = struct {
         defer meta.deinit();
 
         var ph_client_ptr = try ctx.allocator.create(client_mod.Client);
+        errdefer ctx.allocator.destroy(ph_client_ptr);
         ph_client_ptr.* = try client_mod.Client.init(
             ctx.allocator,
             cfg.pantahub_host.?,
             cfg.pantahub_port orelse "443",
             &log,
         );
+        ph_client_ptr.use_https = cfg.pantahub_use_https;
         defer {
             ph_client_ptr.deinit();
             ctx.allocator.destroy(ph_client_ptr);
@@ -557,6 +559,7 @@ fn check_and_process_claim(
                         try map.put("host", .{ .string = cfg.pantahub_host.? });
                         try map.put("port", .{ .string = cfg.pantahub_port orelse "443" });
                         try map.put("token", .{ .string = ph_client.token.? });
+                        try map.put("use_https", .{ .bool = cfg.pantahub_use_https });
                         try client.sendMessage(.logger, .subsystem_init, .{ .object = map });
                     }
 

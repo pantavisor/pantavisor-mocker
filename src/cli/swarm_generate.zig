@@ -4,7 +4,8 @@ const swarm_workspace = @import("swarm_workspace.zig");
 
 pub const GenerateDevicesCmd = struct {
     count: u32 = 0,
-    dir: []const u8 = ".",
+    dir: []const u8 = "devices",
+    workspace: []const u8 = ".",
     host: []const u8 = "api.pantahub.com",
     port: []const u8 = "443",
 
@@ -12,7 +13,8 @@ pub const GenerateDevicesCmd = struct {
         .description = "Generate generic simulated devices.",
         .args = .{
             .count = .{ .short = 'n', .help = "Number of devices to generate." },
-            .dir = .{ .short = 'd', .help = "Workspace directory." },
+            .dir = .{ .short = 'd', .help = "Output directory." },
+            .workspace = .{ .short = 'w', .help = "Workspace directory (contains config files)." },
             .host = .{ .help = "Pantahub API host." },
             .port = .{ .help = "Pantahub API port." },
         },
@@ -24,7 +26,7 @@ pub const GenerateDevicesCmd = struct {
             return error.MissingArgument;
         }
 
-        var ws = try swarm_workspace.SwarmWorkspace.init(allocator, self.dir);
+        var ws = try swarm_workspace.SwarmWorkspace.init(allocator, self.workspace);
         defer ws.deinit();
 
         std.debug.print("Generating {d} devices...\n", .{self.count});
@@ -33,9 +35,9 @@ pub const GenerateDevicesCmd = struct {
             const device_id = swarm_workspace.generateHexId();
             std.debug.print("  Creating Device [{d}/{d}]: {s}\n", .{ i + 1, self.count, &device_id });
 
-            // Build path: {dir}/devices/{id}/mocker
+            // Build path: {dir}/{id}/mocker
             var path_buf: [4096]u8 = undefined;
-            const storage_path = try std.fmt.bufPrint(&path_buf, "{s}/devices/{s}/mocker", .{ self.dir, &device_id });
+            const storage_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}/mocker", .{ self.dir, &device_id });
 
             // Use LocalStore to scaffold
             var store = try local_store.LocalStore.init(allocator, storage_path, ws.autojoin_token, false);
@@ -70,7 +72,8 @@ pub const GenerateDevicesCmd = struct {
 
 pub const GenerateAppliancesCmd = struct {
     count: u32 = 0,
-    dir: []const u8 = ".",
+    dir: []const u8 = "appliances",
+    workspace: []const u8 = ".",
     host: []const u8 = "api.pantahub.com",
     port: []const u8 = "443",
 
@@ -78,7 +81,8 @@ pub const GenerateAppliancesCmd = struct {
         .description = "Generate appliances per channel with multiple models.",
         .args = .{
             .count = .{ .short = 'n', .help = "Number of appliances per channel." },
-            .dir = .{ .short = 'd', .help = "Workspace directory." },
+            .dir = .{ .short = 'd', .help = "Output directory." },
+            .workspace = .{ .short = 'w', .help = "Workspace directory (contains config files)." },
             .host = .{ .help = "Pantahub API host." },
             .port = .{ .help = "Pantahub API port." },
         },
@@ -90,7 +94,7 @@ pub const GenerateAppliancesCmd = struct {
             return error.MissingArgument;
         }
 
-        var ws = try swarm_workspace.SwarmWorkspace.init(allocator, self.dir);
+        var ws = try swarm_workspace.SwarmWorkspace.init(allocator, self.workspace);
         defer ws.deinit();
 
         // Read channels.json
@@ -138,9 +142,9 @@ pub const GenerateAppliancesCmd = struct {
                     var sanitized_model_buf: [256]u8 = undefined;
                     const sanitized_model = sanitizeName(&sanitized_model_buf, model);
 
-                    // Build path: {dir}/appliances/{channel}/{id}/{model}
+                    // Build path: {dir}/{channel}/{id}/{model}
                     var path_buf: [4096]u8 = undefined;
-                    const storage_path = try std.fmt.bufPrint(&path_buf, "{s}/appliances/{s}/{s}/{s}", .{
+                    const storage_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}/{s}/{s}", .{
                         self.dir,
                         sanitized_channel,
                         &appliance_id,

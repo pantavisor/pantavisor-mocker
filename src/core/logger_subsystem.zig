@@ -17,6 +17,7 @@ pub const LoggerSubsystem = struct {
     host: ?[]const u8 = null,
     port: ?[]const u8 = null,
     token: ?[]const u8 = null,
+    use_https: bool = true,
 
     // Buffering
     log_buffer: std.ArrayList(u8),
@@ -97,6 +98,9 @@ pub const LoggerSubsystem = struct {
                             if (data.object.get("token")) |t| {
                                 if (self.token) |old| self.allocator.free(old);
                                 self.token = try self.allocator.dupe(u8, t.string);
+                            }
+                            if (data.object.get("use_https")) |u| {
+                                if (u == .bool) self.use_https = u.bool;
                             }
                         }
                     }
@@ -194,6 +198,7 @@ pub const LoggerSubsystem = struct {
                         self.client = null;
                         continue;
                     };
+                    self.client.?.use_https = self.use_https;
                     self.client.?.token = self.allocator.dupe(u8, self.token.?) catch null;
                 }
 

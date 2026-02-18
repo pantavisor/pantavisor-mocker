@@ -121,6 +121,7 @@ pub const AppState = struct {
         while (it.next()) |line| {
             if (line.len == 0) continue;
             const owned = try self.allocator.dupe(u8, line);
+            errdefer self.allocator.free(owned);
             try self.logs.append(self.allocator, .{
                 .message = owned,
                 .timestamp = std.time.timestamp(),

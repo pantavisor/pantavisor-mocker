@@ -138,6 +138,7 @@ pub const StartCmd = struct {
         // 4. Start Renderer
         if (!self.@"no-tui") {
             var renderer = try tui_renderer.TuiRenderer.init(allocator, &mocker.quit_flag);
+            errdefer renderer.deinit();
             // Retry connection loop
             var connected = false;
             var attempts: usize = 0;
@@ -157,6 +158,7 @@ pub const StartCmd = struct {
             renderer.deinit();
         } else {
             var renderer = try stdinout_renderer.StdInOutRenderer.init(allocator, &mocker.quit_flag);
+            errdefer renderer.deinit();
             // Retry connection loop
             var connected = false;
             var attempts: usize = 0;

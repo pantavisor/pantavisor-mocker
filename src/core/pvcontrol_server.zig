@@ -63,6 +63,7 @@ pub const PvControlServer = struct {
 
     pub fn init(allocator: std.mem.Allocator, storage_path: []const u8, quit_flag: *std.atomic.Value(bool), is_debug: bool, log: ?*logger.Logger) !PvControlServer {
         const socket_path = try std.fs.path.join(allocator, &[_][]const u8{ storage_path, "pantavisor", "pv-ctrl" });
+        errdefer allocator.free(socket_path);
 
         return PvControlServer{
             .allocator = allocator,
@@ -708,12 +709,14 @@ pub const PvControlServer = struct {
                 const content = std.fs.cwd().readFileAlloc(self.allocator, path, 1024 * 1024) catch {
                     return jsonResponse(self.allocator, 200, "{}");
                 };
+                defer self.allocator.free(content);
                 return jsonResponse(self.allocator, 200, content);
             } else {
                 // Get step json
                 const path = try std.fs.path.join(self.allocator, &[_][]const u8{ trails_dir, parts, ".pvr", "json" });
                 defer self.allocator.free(path);
                 const content = try std.fs.cwd().readFileAlloc(self.allocator, path, 1024 * 1024);
+                defer self.allocator.free(content);
                 return jsonResponse(self.allocator, 200, content);
             }
         } else if (req.method == .PUT) {

@@ -10,19 +10,19 @@ pub const SwarmWorkspace = struct {
 
     pub fn init(allocator: std.mem.Allocator, dir: []const u8) !SwarmWorkspace {
         const autojoin_token = readAndTrimFile(allocator, dir, "autojointoken.txt") catch |err| {
-            std.debug.print("Error: Could not read autojointoken.txt. Run 'swarm init' first.\n", .{});
+            std.debug.print("Error: Could not read autojointoken.txt in '{s}'. Run 'swarm init' first.\n", .{dir});
             return err;
         };
         errdefer allocator.free(autojoin_token);
 
         const group_key = readAndTrimFile(allocator, dir, "group_key.txt") catch |err| {
-            std.debug.print("Error: Could not read group_key.txt. Run 'swarm init' first.\n", .{});
+            std.debug.print("Error: Could not read group_key.txt in '{s}'. Run 'swarm init' first.\n", .{dir});
             return err;
         };
         errdefer allocator.free(group_key);
 
         const base_json = readFile(allocator, dir, "base.json") catch |err| {
-            std.debug.print("Error: Could not read base.json. Run 'swarm init' first.\n", .{});
+            std.debug.print("Error: Could not read base.json in '{s}'. Run 'swarm init' first.\n", .{dir});
             return err;
         };
         errdefer allocator.free(base_json);
