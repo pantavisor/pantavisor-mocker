@@ -503,11 +503,215 @@ pantavisor.uname.node.name
 
 ## Architecture
 
-This project follows a multi-threaded, message-based architecture designed for scalability and testability.
+This project follows a multi-threaded, message-based architecture designed for scalability and testability. The system is composed of independent subsystems that communicate through a central router using Unix domain sockets and JSON messages.
 
-- **Core Router**: Manages subsystem lifecycles and routes messages between them using Unix domain sockets.
-- **Subsystems**:
-  - **Renderer**: Handles user interaction (TUI or StdInOut).
-  - **Logger**: Handles log buffering, file I/O, and cloud uploads.
-  - **Background Job (Mocker)**: Handles core business logic (sync, updates, invitations).
-- **Communication**: Subsystems communicate via JSON messages over IPC.
+### Core Components
+
+#### 1. **Router** (`src/core/router.zig`)
+- Central IPC message broker running on a Unix domain socket
+- Manages subsystem lifecycle (registration, message routing, shutdown)
+- Handles up to 64 concurrent connections
+- Routes messages between subsystems based on `SubsystemId`
+
+#### 2. **Background Job / Mocker** (`src/core/mocker.zig`)
+- Main business logic coordinator
+- Runs the primary event loop for:
+  - Device registration and authentication
+  - Metadata synchronization (device ↔ Pantahub)
+  - Update flow processing (download, install, test)
+  - Fleet invitation handling
+- Coordinates with Router via IPC client
+- Manages pvcontrol server for Pantavisor Control API
+
+#### 3. **Logger Subsystem** (`src/core/logger_subsystem.zig`)
+- Buffers log messages from all subsystems
+- Persists logs to local storage (`storage/logs/`)
+- Periodically uploads logs to Pantahub
+- Thread-safe log buffering with mutex protection
+
+#### 4. **Renderer** (`src/ui/`)
+- **TUI Renderer** (`src/ui/tui_renderer.zig`): Vaxis-based terminal UI
+- **StdInOut Renderer** (`src/ui/stdinout_renderer.zig`): Fallback CLI interface
+- Displays system state, progress, and invitations
+- Collects user input for update decisions and invitations
+
+#### 5. **pvcontrol Server** (`src/core/pvcontrol_server.zig`)
+- Implements Pantavisor Control API on Unix socket
+- Provides compatibility layer for `pvcontrol` CLI tool
+- Endpoints: containers, groups, metadata, objects, steps, config, etc.
+
+### Subsystems & Communication
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        CLI Entry Point                          │
+│                     (src/main.zig + cli/)                       │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         │ initializes
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                         Router (IPC Hub)                        │
+│                    (src/core/router.zig)                        │
+│                                                                  │
+│  Unix Socket: storage/mocker.sock                               │
+│  Routes JSON messages between subsystems                        │
+└────────┬───────────────┬───────────────┬────────────────────────┘
+         │               │               │
+         │               │               │
+         ▼               ▼               ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────────────────────┐
+│   Renderer   │  │    Logger    │  │    Background Job (Mocker)   │
+│              │  │              │  │                              │
+│ - TUI Mode   │  │ - Buffer     │  │  ┌────────────────────────┐  │
+│ - StdIO Mode │  │ - Persist    │  │  │  Main Event Loop       │  │
+│              │  │ - Upload     │  │  │                        │  │
+│ User Input:  │  │              │  │  │  - Registration        │  │
+│  - Update    │◄─┤              │  │  │  - Metadata Sync       │  │
+│  - Invite    │  │              │  │  │  - Update Flow         │  │
+└──────────────┘  └──────────────┘  │  │  - Invitations         │  │
+                                    │  └──────────┬─────────────┘  │
+                                    │             │                │
+                                    │             ▼                │
+                                    │  ┌────────────────────────┐  │
+                                    │  │   pvcontrol Server     │  │
+                                    │  │  (Unix Socket Server)  │  │
+                                    │  │                        │  │
+                                    │  │  Compatible with       │  │
+                                    │  │  pvcontrol CLI         │  │
+                                    │  └────────────────────────┘  │
+                                    └──────────────────────────────┘
+```
+
+### Message Flow Architecture
+
+```
+SubsystemId: [core, renderer, logger, background_job]
+
+MessageType:
+  Control:
+    - subsystem_init
+    - subsystem_start
+    - subsystem_stop
+    - subsystem_ready
+
+  Application:
+    - log_message           (any → logger)
+    - render_log            (any → renderer)
+    - render_update         (background_job → renderer)
+    - render_invite         (background_job → renderer)
+    - get_user_input        (background_job → renderer)
+    - sync_progress         (background_job → renderer)
+    - invitation_required   (background_job → core)
+    - update_required       (background_job → core)
+    - user_response         (renderer → background_job)
+
+  Response:
+    - response_ok
+    - response_error
+    - user_decision
+```
+
+### Data Flow Examples
+
+#### Update Flow
+```
+1. Background Job detects update from Pantahub
+   └─► Message: update_required (to: core)
+   
+2. Background Job downloads & installs
+   └─► Message: render_update (to: renderer)
+   └─► Message: sync_progress (to: renderer)
+   
+3. Update reaches TESTING phase
+   └─► Message: get_user_input (to: renderer)
+   
+4. User makes decision (Pass/Fail)
+   └─► Message: user_decision (to: background_job)
+   
+5. Background Job proceeds or rolls back
+   └─► Message: render_state_change (to: renderer)
+```
+
+#### Fleet Invitation Flow
+```
+1. Background Job detects invitation in User Metadata
+   └─► Message: invitation_required (to: core)
+   
+2. Renderer prompts user
+   └─► Message: render_invite (to: renderer)
+   └─► Message: get_user_input (to: renderer)
+   
+3. User accepts/skips
+   └─► Message: user_decision (to: background_job)
+   
+4. Background Job posts response to Device Metadata
+   └─► Message: sync_progress (to: renderer)
+```
+
+### Key Modules
+
+| Module | Path | Purpose |
+|--------|------|---------|
+| **Router** | `src/core/router.zig` | IPC message routing, subsystem management |
+| **Mocker** | `src/core/mocker.zig` | Main coordinator, event loop |
+| **Background Job** | `src/core/background_job.zig` | Subsystem wrapper for Mocker |
+| **Logger Subsystem** | `src/core/logger_subsystem.zig` | Log buffering & upload |
+| **IPC** | `src/core/ipc.zig` | IPC client/server implementation |
+| **Messages** | `src/core/messages.zig` | JSON message definitions |
+| **Config** | `src/core/config.zig` | Configuration management |
+| **Local Store** | `src/core/local_store.zig` | File system operations |
+| **Business Logic** | `src/core/business_logic.zig` | Update/validation algorithms |
+| **Update Flow** | `src/flows/update_flow.zig` | OTA update state machine |
+| **Invitation** | `src/flows/invitation.zig` | Fleet invitation protocol |
+| **Client** | `src/net/client.zig` | Pantahub API client |
+| **pvcontrol Server** | `src/core/pvcontrol_server.zig` | Pantavisor Control API server |
+
+### Thread Model
+
+```
+Main Thread
+├─ CLI Framework (command parsing)
+└─ Renderer (blocking UI loop)
+    ├─ TUI Renderer: Vaxis event loop
+    └─ StdIO Renderer: stdin polling
+
+Router Thread
+└─ Unix socket accept loop
+    └─ Spawns detached threads for each connection
+
+Logger Thread
+├─ IPC receive loop (from Router)
+├─ Flush loop (periodic buffer write)
+└─ Upload loop (periodic cloud push)
+
+Background Job Thread
+├─ IPC receive loop (from Router)
+└─ Main event loop
+    ├─ Registration check
+    ├─ Metadata sync (timed intervals)
+    ├─ Update detection & processing
+    └─ Invitation handling
+
+pvcontrol Thread
+└─ Unix socket server (pv-ctrl socket)
+    └─ Spawns threads for each pvcontrol connection
+```
+
+### Communication Protocol
+
+All inter-subsystem communication uses JSON messages over Unix domain sockets:
+
+```json
+{
+  "from": "background_job",
+  "to": "renderer",
+  "type": "render_update",
+  "data": {
+    "percentage": 75,
+    "details": "Downloading objects..."
+  }
+}
+```
+
+Messages are serialized/deserialized using Zig's `std.json` module and transmitted as length-prefixed frames for reliable parsing.
