@@ -151,6 +151,60 @@ Start the simulation using the initialized storage.
 pantavisor-mocker start --storage my_storage
 ```
 
+### Automation Mode
+
+The mocker supports an **automation mode** that automatically responds to invitations and update decisions without manual user interaction. This is enabled using the `--auto` flag on the `start` command.
+
+```bash
+pantavisor-mocker start --storage my_storage --auto
+```
+
+When automation mode is active:
+- **Fleet invitations** are automatically accepted, skipped, or deferred based on configured weights
+- **Update decisions** are automatically selected (DONE, UPDATED, ERROR, or WONTGO) based on configured weights
+- **Mandatory invitations** are always auto-accepted regardless of weights
+
+#### Automation Configuration
+
+Automation behavior can be customized via the `automation` block in `storage/config/mocker.json`:
+
+```json
+{
+  "automation": {
+    "enabled": true,
+    "seed": 12345,
+    "invitation": {
+      "accept": 70,
+      "skip": 20,
+      "later": 10
+    },
+    "update": {
+      "done": 60,
+      "updated": 25,
+      "error": 10,
+      "wontgo": 5
+    }
+  }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `enabled` | Set to `true` to enable automation (can also be enabled via `--auto` flag) |
+| `seed` | Optional random seed for reproducible behavior |
+| `invitation.accept` | Weight for accepting invitations (default: 100) |
+| `invitation.skip` | Weight for skipping invitations (default: 0) |
+| `invitation.later` | Weight for deferring invitations (default: 0) |
+| `update.done` | Weight for DONE response (default: 100) |
+| `update.updated` | Weight for UPDATED response (default: 0) |
+| `update.error` | Weight for ERROR response - simulates failure (default: 0) |
+| `update.wontgo` | Weight for WONTGO response - rejects update (default: 0) |
+
+**Notes:**
+- Weights are relative, not percentages. For example, `{accept: 70, skip: 20, later: 10}` means 70% accept, 20% skip, 10% later.
+- The `--auto` CLI flag overrides `automation.enabled` to `true`, even if the config file has it set to `false`.
+- If `--auto` is used without an `automation` block in `mocker.json`, default weights are applied (100% accept for invitations, 100% DONE for updates).
+
 ### Interactive Updates
 
 When the mocker receives an update from Pantahub, it will proceed through the DOWNLOADING and INPROGRESS states. Once it reaches the TESTING phase, the process will pause and prompt for a manual decision via the terminal:
@@ -302,6 +356,9 @@ pantavisor-mocker swarm status
 # 5. Launch all mockers in tmux sessions
 pantavisor-mocker swarm simulate
 
+# Or with automation mode (auto-respond to invitations/updates)
+pantavisor-mocker swarm simulate --auto
+
 # 6. Clean up when done
 pantavisor-mocker swarm clean --target all
 ```
@@ -391,13 +448,24 @@ appliances/
 
 Each `mocker.json` contains merged metadata from `base.json` + channel overlay + random values + group key + model name.
 
-#### `swarm simulate [--dir <dir>]`
+#### `swarm simulate [--dir <dir>] [--auto]`
 
 Scans the workspace for all generated `mocker.json` files and launches each one in a separate tmux session.
 
 ```bash
 pantavisor-mocker swarm simulate
 ```
+
+**Options:**
+- `-d, --dir <dir>`: Workspace directory (default: `.`)
+- `-a, --auto`: Enable automation mode for all simulated devices (passes `--auto` to each mocker instance)
+
+```bash
+# Launch all mockers with automation enabled
+pantavisor-mocker swarm simulate --auto
+```
+
+When `--auto` is used, each simulated device will automatically respond to invitations and updates based on its `mocker.json` automation configuration (or defaults if not configured). This is useful for large-scale fleet testing without manual intervention.
 
 Presents an interactive menu:
 ```
