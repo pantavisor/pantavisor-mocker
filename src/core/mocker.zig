@@ -14,6 +14,7 @@ const business_logic = @import("business_logic.zig");
 const router_mod = @import("router.zig");
 const ipc = @import("ipc.zig");
 const messages = @import("messages.zig");
+const automation = @import("automation.zig");
 pub const pvcontrol_server = @import("pvcontrol_server.zig");
 
 const boot_state = constants.BOOT_STATE_JSON;
@@ -24,6 +25,7 @@ pub const TaskContext = struct {
     storage_path: []const u8,
     is_one_shot: bool,
     is_debug: bool,
+    is_auto: bool,
     ipc_client: ?*ipc.IpcClient,
     quit_flag: *std.atomic.Value(bool),
     inv_response_mutex: *std.Thread.Mutex,
@@ -32,6 +34,7 @@ pub const TaskContext = struct {
     update_response: *?tui.UpdateResponse,
     progress_mutex: *std.Thread.Mutex,
     try_rev_ptr: *?[]const u8,
+    automation_config: *?automation.AutomationConfig,
 };
 
 pub const Mocker = struct {
@@ -39,6 +42,7 @@ pub const Mocker = struct {
     storage_path: []const u8,
     is_one_shot: bool,
     is_debug: bool,
+    is_auto: bool,
     quit_flag: std.atomic.Value(bool),
     router: ?router_mod.Router = null,
     ipc_client: ?ipc.IpcClient = null,
@@ -60,15 +64,20 @@ pub const Mocker = struct {
     progress_mutex: std.Thread.Mutex = .{}, // Use default value
     try_rev_ptr: ?[]const u8 = null,
 
-    pub fn init(allocator: std.mem.Allocator, storage_path: []const u8, is_one_shot: bool, is_debug: bool) Mocker {
+    // Automation state (copied from config after load)
+    automation_config: ?automation.AutomationConfig = null,
+
+    pub fn init(allocator: std.mem.Allocator, storage_path: []const u8, is_one_shot: bool, is_debug: bool, is_auto: bool) Mocker {
         return .{ // Use default value
             .allocator = allocator,
             .storage_path = storage_path,
             .is_one_shot = is_one_shot,
             .is_debug = is_debug,
+            .is_auto = is_auto,
             .quit_flag = std.atomic.Value(bool).init(false),
             .ipc_client = null,
             .try_rev_ptr = null,
+            .automation_config = null,
         };
     }
 
@@ -120,6 +129,7 @@ pub const Mocker = struct {
             .storage_path = self.storage_path,
             .is_one_shot = self.is_one_shot,
             .is_debug = self.is_debug,
+            .is_auto = self.is_auto,
             .ipc_client = if (self.ipc_client) |*c| c else null,
             .quit_flag = &self.quit_flag,
             .inv_response_mutex = &self.inv_response_mutex,
@@ -128,6 +138,7 @@ pub const Mocker = struct {
             .update_response = &self.update_response,
             .progress_mutex = &self.progress_mutex,
             .try_rev_ptr = &self.try_rev_ptr,
+            .automation_config = &self.automation_config,
         };
     }
 
@@ -266,6 +277,27 @@ pub const Mocker = struct {
         defer cfg.deinit();
         std.debug.assert(cfg.pantahub_host != null);
 
+        // Copy automation config from loaded config to mocker context
+        // Enable automation if --auto flag is set OR if config has automation.enabled = true
+        if (cfg.automation_config) |auto_cfg| {
+            self.automation_config = auto_cfg;
+            // If --auto CLI flag is set, override enabled to true
+            if (ctx.is_auto) {
+                self.automation_config.?.enabled = true;
+            }
+            if (self.automation_config.?.enabled) {
+                var weights_buf: [128]u8 = undefined;
+                log.log("[AUTO] Automation mode ENABLED", .{});
+                log.log("[AUTO] Invitation weights: {s}", .{self.automation_config.?.invitationWeightsString(&weights_buf)});
+                log.log("[AUTO] Update weights: {s}", .{self.automation_config.?.updateWeightsString(&weights_buf)});
+            }
+        } else if (ctx.is_auto) {
+            // --auto flag set but no config block - use defaults
+            self.automation_config = automation.AutomationConfig.init(ctx.allocator, null);
+            self.automation_config.?.enabled = true;
+            log.log("[AUTO] Automation mode ENABLED (using defaults)", .{});
+        }
+
         var meta = meta_mod.Meta.init(ctx.allocator);
         defer meta.deinit();
 
@@ -329,7 +361,6 @@ pub const Mocker = struct {
         meta: *meta_mod.Meta,
         pending_inv: *?invitation.InviteToken,
     ) !void {
-        _ = self;
         // Check for new invitations
         if (pending_inv.* == null) {
             if (try invitation.detect_invitation(ctx.allocator, store, log, ph_client, cfg)) |inv| {
@@ -364,12 +395,29 @@ pub const Mocker = struct {
 
                     try client.sendMessage(.renderer, .render_invite, .{ .object = map });
 
+                    // Handle mandatory invitations (always auto-accept)
                     if (inv.mandatory orelse false) {
                         log.log("Invitation is MANDATORY. Automatically ACCEPTING.", .{});
                         try invitation.process_answer(ctx.allocator, store, log, meta, cfg, inv, .accept);
                         invitation.free_invite(ctx.allocator, inv);
                         pending_inv.* = null;
                         return;
+                    }
+
+                    // Handle automation mode for non-mandatory invitations
+                    if (self.automation_config) |*auto_cfg| {
+                        if (auto_cfg.enabled) {
+                            const decision = auto_cfg.selectInvitationResponse();
+                            var weights_buf: [128]u8 = undefined;
+                            log.log("[AUTO] Invitation response: {s} (weights: {s})", .{
+                                @tagName(decision),
+                                auto_cfg.invitationWeightsString(&weights_buf),
+                            });
+                            try invitation.process_answer(ctx.allocator, store, log, meta, cfg, inv, decision);
+                            invitation.free_invite(ctx.allocator, inv);
+                            pending_inv.* = null;
+                            return;
+                        }
                     }
                 }
             }
@@ -480,6 +528,16 @@ pub const Mocker = struct {
 
 fn ask_user_update_status(ctx_ptr: *const anyopaque) client_mod.UpdateStatus {
     const ctx: *const TaskContext = @ptrCast(@alignCast(ctx_ptr));
+
+    // Check if automation is enabled
+    if (ctx.automation_config.*) |*auto_cfg| {
+        if (auto_cfg.enabled) {
+            const status = auto_cfg.selectUpdateResponse();
+            // Note: We can't easily log here since we don't have access to the logger
+            // The decision will be logged at a higher level or we accept this limitation
+            return status;
+        }
+    }
 
     if (ctx.ipc_client) |client| {
         client.sendMessage(.renderer, .update_required, null) catch return .DONE;

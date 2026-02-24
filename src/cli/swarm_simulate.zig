@@ -22,11 +22,13 @@ fn killAllSessions(allocator: std.mem.Allocator) void {
 
 pub const SwarmSimulateCmd = struct {
     dir: []const u8 = ".",
+    auto: bool = false,
 
     pub const meta = .{
         .description = "Launch tmux-based simulation for all generated mockers.",
         .args = .{
             .dir = .{ .short = 'd', .help = "Workspace directory." },
+            .auto = .{ .short = 'a', .help = "Enable automation mode for all simulated devices (auto-respond based on mocker.json config)." },
         },
     };
 
@@ -145,10 +147,17 @@ pub const SwarmSimulateCmd = struct {
         defer allocator.free(exe_path);
 
         for (sessions.items) |session| {
-            std.debug.print("Starting simulation for: {s} (tmux: {s})\n", .{ session.path, session.name });
+            std.debug.print("Starting simulation for: {s} (tmux: {s}){s}\n", .{
+                session.path,
+                session.name,
+                if (self.auto) " [AUTO]" else "",
+            });
 
             var cmd_buf: [8192]u8 = undefined;
-            const cmd = std.fmt.bufPrint(&cmd_buf, "\"{s}\" start -s \"{s}\"", .{ exe_path, session.path }) catch continue;
+            const cmd = if (self.auto)
+                std.fmt.bufPrint(&cmd_buf, "\"{s}\" start -s \"{s}\" --auto", .{ exe_path, session.path }) catch continue
+            else
+                std.fmt.bufPrint(&cmd_buf, "\"{s}\" start -s \"{s}\"", .{ exe_path, session.path }) catch continue;
 
             const result = std.process.Child.run(.{
                 .allocator = allocator,
@@ -161,7 +170,10 @@ pub const SwarmSimulateCmd = struct {
             allocator.free(result.stderr);
         }
 
-        std.debug.print("\nStarted {d} simulation(s).\n", .{sessions.items.len});
+        std.debug.print("\nStarted {d} simulation(s){s}.\n", .{
+            sessions.items.len,
+            if (self.auto) " in AUTOMATION mode" else "",
+        });
 
         const stdin_file = std.fs.File.stdin();
 

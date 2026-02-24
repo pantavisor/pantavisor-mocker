@@ -1,5 +1,6 @@
 const std = @import("std");
 const local_store = @import("local_store.zig");
+const automation = @import("automation.zig");
 
 pub const Config = struct {
     allocator: std.mem.Allocator,
@@ -20,6 +21,9 @@ pub const Config = struct {
     // Mocker JSON overrides
     mocker_meta: ?std.json.Value = null,
     mocker_json_parsed: ?std.json.Parsed(std.json.Value) = null,
+
+    // Automation configuration (optional, loaded from mocker.json)
+    automation_config: ?automation.AutomationConfig = null,
 
     pub fn deinit(self: *Config) void {
         std.debug.assert(self.devmeta_interval_s >= 0);
@@ -162,6 +166,14 @@ pub fn load(allocator: std.mem.Allocator, store: local_store.LocalStore, log: an
                     if (dm == .object) {
                         cfg.mocker_meta = dm;
                     }
+                }
+            }
+
+            // Parse automation configuration
+            cfg.automation_config = automation.AutomationConfig.parseFromJson(allocator, parsed.value);
+            if (cfg.automation_config) |auto_cfg| {
+                if (auto_cfg.enabled) {
+                    log.log("[AUTO] Automation config loaded (enabled={}, seed={})", .{ auto_cfg.enabled, auto_cfg.seed orelse 0 });
                 }
             }
         } else |err| {

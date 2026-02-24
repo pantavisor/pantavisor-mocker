@@ -68,6 +68,7 @@ pub const StartCmd = struct {
     @"one-shot": bool = false,
     debug: bool = false,
     @"no-tui": bool = false,
+    auto: bool = false,
 
     pub const meta = .{
         .description = "Start the main mocker process.",
@@ -76,11 +77,12 @@ pub const StartCmd = struct {
             .@"one-shot" = .{ .help = "Run a single cycle of the main loop and exit." },
             .debug = .{ .help = "Enable debug logging." },
             .@"no-tui" = .{ .help = "Disable TUI mode." },
+            .auto = .{ .short = 'a', .help = "Enable automation mode (auto-respond to invitations/updates based on mocker.json config)." },
         },
     };
 
     pub fn run(self: @This(), allocator: std.mem.Allocator) !void {
-        var mocker = core_mocker.Mocker.init(allocator, self.storage, self.@"one-shot", self.debug);
+        var mocker = core_mocker.Mocker.init(allocator, self.storage, self.@"one-shot", self.debug, self.auto);
         defer mocker.deinit();
 
         // Signal handler for clean shutdown
