@@ -92,7 +92,7 @@ pub const LocalStore = struct {
     fn validate_revision(rev: []const u8) !void {
         if (rev.len == 0) return error.InvalidRevision;
         for (rev) |c| {
-            if (!std.ascii.isAlphanumeric(c) and c != '.' and c != '-' and c != '_') {
+            if (!std.ascii.isAlphanumeric(c) and c != '.' and c != '-' and c != '_' and c != '/') {
                 return error.InvalidRevision;
             }
         }
