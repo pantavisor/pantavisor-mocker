@@ -254,11 +254,19 @@ pub const Mocker = struct {
         defer ctx.allocator.free(log_path);
 
         var log = try logger.Logger.init(log_path, ctx.is_debug);
-        defer log.deinit();
         log.ipc_client = ctx.ipc_client;
         log.allocator = ctx.allocator;
 
         self.pvcontrol_server = try pvcontrol_server.PvControlServer.init(ctx.allocator, ctx.storage_path, ctx.quit_flag, ctx.is_debug, &log);
+        // Defer cleanup of pvcontrol_server BEFORE log.deinit() so the server stops
+        // while the logger is still valid. Defers execute in reverse order.
+        defer {
+            if (self.pvcontrol_server) |*s| {
+                s.deinit();
+                self.pvcontrol_server = null;
+            }
+        }
+        defer log.deinit();
         try self.pvcontrol_server.?.start();
 
         {

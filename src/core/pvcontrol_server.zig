@@ -128,20 +128,20 @@ pub const PvControlServer = struct {
     fn handleConnection(self: *PvControlServer, stream: std.net.Stream) !void {
         defer stream.close();
 
-        // Read headers first
-        var buf: [65536]u8 = undefined;
+        // Read headers into a small stack buffer first
+        var header_buf: [8192]u8 = undefined;
         var total_read: usize = 0;
         var headers_end: ?usize = null;
 
         // Read until we find the end of headers (\r\n\r\n)
-        while (total_read < buf.len) {
-            const n = try stream.read(buf[total_read..]);
+        while (total_read < header_buf.len) {
+            const n = try stream.read(header_buf[total_read..]);
             if (n == 0) return; // Connection closed
             total_read += n;
 
             // Check for end of headers
             if (total_read >= 4) {
-                const data = buf[0..total_read];
+                const data = header_buf[0..total_read];
                 if (std.mem.indexOf(u8, data, "\r\n\r\n")) |end| {
                     headers_end = end + 4;
                     break;
@@ -151,21 +151,34 @@ pub const PvControlServer = struct {
 
         if (headers_end == null) return; // Headers too large or malformed
 
-        // Parse Content-Length if present
+        // Parse Content-Length if present (case-insensitive)
         var content_length: ?usize = null;
-        const headers_data = buf[0..headers_end.?];
-        if (std.mem.indexOf(u8, headers_data, "Content-Length:")) |cl_start| {
-            const after_cl = headers_data[cl_start + 15 ..];
-            if (std.mem.indexOf(u8, after_cl, "\r\n")) |cl_end| {
-                const cl_str = std.mem.trim(u8, after_cl[0..cl_end], " \t");
-                content_length = std.fmt.parseInt(usize, cl_str, 10) catch null;
+        const headers_data = header_buf[0..headers_end.?];
+        var header_it = std.mem.splitSequence(u8, headers_data, "\r\n");
+        _ = header_it.next(); // Skip request line
+        while (header_it.next()) |line| {
+            if (line.len == 0) break;
+            if (std.mem.indexOf(u8, line, ":")) |colon_idx| {
+                const name = std.mem.trim(u8, line[0..colon_idx], " ");
+                if (std.ascii.eqlIgnoreCase(name, "Content-Length")) {
+                    const value = std.mem.trim(u8, line[colon_idx + 1 ..], " ");
+                    content_length = std.fmt.parseInt(usize, value, 10) catch null;
+                    break;
+                }
             }
         }
 
-        // Read body if Content-Length is specified
+        // Allocate buffer for full request (headers + body) dynamically
+        const total_size = if (content_length) |cl| headers_end.? + cl else total_read;
+        const buf = try self.allocator.alloc(u8, total_size);
+        defer self.allocator.free(buf);
+
+        // Copy what we already read
+        @memcpy(buf[0..total_read], header_buf[0..total_read]);
+
+        // Read remaining body if Content-Length is specified
         if (content_length) |cl| {
             const body_start = headers_end.?;
-            if (cl > buf.len - body_start) return; // Body too large
             var body_received = total_read - body_start;
 
             while (body_received < cl) {
@@ -404,9 +417,75 @@ pub const PvControlServer = struct {
             if (std.mem.containsAtLeast(u8, body, 1, "REBOOT_DEVICE") or std.mem.containsAtLeast(u8, body, 1, "POWEROFF_DEVICE")) {
                 if (self.context.logger) |l| l.log("REBOOT/POWEROFF requested via pvcontrol. Signaling quit.", .{});
                 self.context.quit_flag.store(true, .release);
+            } else if (std.mem.containsAtLeast(u8, body, 1, "LOCAL_RUN_COMMIT")) {
+                return self.handleLocalRun(body, true);
+            } else if (std.mem.containsAtLeast(u8, body, 1, "LOCAL_RUN")) {
+                return self.handleLocalRun(body, false);
             }
         }
         return jsonResponse(self.allocator, 200, "");
+    }
+
+    fn handleLocalRun(self: *PvControlServer, body: []const u8, commit: bool) !http_parser.HttpResponse {
+        // Parse the revision from {"op":"LOCAL_RUN","payload":"<rev>"}
+        const parsed = std.json.parseFromSlice(struct { op: []const u8, payload: []const u8 }, self.allocator, body, .{ .ignore_unknown_fields = true }) catch {
+            return jsonResponse(self.allocator, 400, "{\"error\":\"invalid command json\"}");
+        };
+        defer parsed.deinit();
+
+        const rev = parsed.value.payload;
+        if (rev.len == 0) {
+            return jsonResponse(self.allocator, 400, "{\"error\":\"empty revision\"}");
+        }
+
+        if (self.context.logger) |l| l.log("LOCAL_RUN{s} requested for revision: {s}", .{ if (commit) "_COMMIT" else "", rev });
+
+        var store = local_store.LocalStore{
+            .allocator = self.allocator,
+            .base_path = self.context.storage_path,
+        };
+
+        // Ensure revision directories exist
+        store.init_revision_dirs(rev) catch |err| {
+            if (self.context.logger) |l| l.log("Failed to init revision dirs for {s}: {any}", .{ rev, err });
+            return jsonResponse(self.allocator, 500, "{\"error\":\"failed to init revision dirs\"}");
+        };
+
+        // Save progress as DONE
+        const done_progress = "{\"status\":\"DONE\",\"status-msg\":\"Local run applied\",\"progress\":100,\"data\":\"\"}";
+        store.save_revision_progress(rev, done_progress) catch |err| {
+            if (self.context.logger) |l| l.log("Failed to save progress for {s}: {any}", .{ rev, err });
+        };
+
+        // Init log directory
+        store.init_log_dir(rev) catch |err| {
+            if (self.context.logger) |l| l.log("Failed to init log dir for {s}: {any}", .{ rev, err });
+        };
+
+        // Update revision tracking
+        if (commit) {
+            // LOCAL_RUN_COMMIT: set both rev and try_rev to the new revision
+            store.set_revision(rev) catch |err| {
+                if (self.context.logger) |l| l.log("Failed to set revision {s}: {any}", .{ rev, err });
+                return jsonResponse(self.allocator, 500, "{\"error\":\"failed to set revision\"}");
+            };
+        } else {
+            // LOCAL_RUN: keep stable rev, set try_rev to the new revision
+            const cur_revs = store.get_revisions() catch |err| {
+                if (self.context.logger) |l| l.log("Failed to get current revisions: {any}", .{err});
+                return jsonResponse(self.allocator, 500, "{\"error\":\"failed to get revisions\"}");
+            };
+            defer self.allocator.free(cur_revs.rev);
+            defer self.allocator.free(cur_revs.try_rev);
+
+            store.set_revisions(cur_revs.rev, rev) catch |err| {
+                if (self.context.logger) |l| l.log("Failed to set revisions: {any}", .{err});
+                return jsonResponse(self.allocator, 500, "{\"error\":\"failed to set revisions\"}");
+            };
+        }
+
+        if (self.context.logger) |l| l.log("LOCAL_RUN{s} completed for revision {s}", .{ if (commit) "_COMMIT" else "", rev });
+        return jsonResponse(self.allocator, 200, "{\"status\":\"ok\"}");
     }
 
     fn handleDeviceMeta(self: *PvControlServer, req: http_parser.HttpRequest) !http_parser.HttpResponse {

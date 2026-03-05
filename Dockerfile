@@ -50,6 +50,7 @@ ARG TARGETPLATFORM
 RUN apt-get update && apt-get install -y --no-install-recommends \
 	libcurl4 \
 	ca-certificates \
+	tmux \
 	&& rm -rf /var/lib/apt/lists/*
 
 # Create necessary directories
