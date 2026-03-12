@@ -176,10 +176,20 @@ pub fn get_interfaces(allocator: std.mem.Allocator) ![]const u8 {
     var curr = ifap;
     while (curr) |ifa| : (curr = ifa.*.ifa_next) {
         if (ifa.*.ifa_addr == null) continue;
+        const name = std.mem.sliceTo(ifa.*.ifa_name, 0);
+
+        // Filter out non-physical interfaces
+        if (std.mem.eql(u8, name, "lo") or
+            std.mem.startsWith(u8, name, "br-") or
+            std.mem.startsWith(u8, name, "veth") or
+            std.mem.eql(u8, name, "docker0") or
+            std.mem.startsWith(u8, name, "tailscale")) {
+            continue;
+        }
+
         const family = ifa.*.ifa_addr.*.sa_family;
         if (family != c.AF_INET and family != c.AF_INET6) continue;
 
-        const name = std.mem.sliceTo(ifa.*.ifa_name, 0);
         const suffix = if (family == c.AF_INET) ".ipv4" else ".ipv6";
         const key = try std.mem.concat(allocator, u8, &[_][]const u8{ name, suffix });
         defer allocator.free(key);

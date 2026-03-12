@@ -5,6 +5,8 @@ pub const c = @cImport({
     @cInclude("stdlib.h");
 });
 
+const log = std.log.scoped(.curl);
+
 // Import Shim Functions
 extern "c" fn curl_shim_global_init() c.CURLcode;
 extern "c" fn curl_shim_global_cleanup() void;
@@ -17,6 +19,7 @@ extern "c" fn curl_shim_getinfo_long(handle: *c.CURL, info: c.CURLINFO, value: *
 extern "c" fn curl_shim_slist_append(list: ?*c.curl_slist, string: [*:0]const u8) ?*c.curl_slist;
 extern "c" fn curl_shim_slist_free_all(list: ?*c.curl_slist) void;
 extern "c" fn curl_shim_simple_request(url: [*:0]const u8, method: [*:0]const u8, payload: ?[*:0]const u8, headers: ?*c.curl_slist, response: *?[*]u8, response_len: *usize) c.CURLcode;
+extern "c" fn curl_shim_strerror(errornum: c.CURLcode) [*:0]const u8;
 
 pub const Curl = struct {
     handle: *c.CURL,
@@ -67,6 +70,8 @@ pub const Curl = struct {
     pub fn perform(self: *Curl) !void {
         const res = curl_shim_perform(self.handle);
         if (res != c.CURLE_OK) {
+            const err_msg = std.mem.span(curl_shim_strerror(res));
+            log.err("curl perform failed: {s}", .{err_msg});
             return error.CurlPerformFailed;
         }
     }
@@ -88,7 +93,11 @@ pub const Curl = struct {
         var response_len: usize = 0;
 
         const res = curl_shim_simple_request(url_z, method_z, if (payload_z) |p| p else null, headers, &response_ptr, &response_len);
-        if (res != c.CURLE_OK) return error.CurlPerformFailed;
+        if (res != c.CURLE_OK) {
+            const err_msg = std.mem.span(curl_shim_strerror(res));
+            log.err("curl request to {s} failed: {s}", .{ url, err_msg });
+            return error.CurlPerformFailed;
+        }
 
         if (response_ptr) |ptr| {
             const owned = try allocator.dupe(u8, ptr[0..response_len]);

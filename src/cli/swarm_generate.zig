@@ -29,10 +29,23 @@ pub const GenerateDevicesCmd = struct {
         var ws = try swarm_workspace.SwarmWorkspace.init(allocator, self.workspace);
         defer ws.deinit();
 
+        // Read models
+        var models = try ws.readModels();
+        defer {
+            for (models.items) |m| allocator.free(m);
+            models.deinit(allocator);
+        }
+
+        if (models.items.len == 0) {
+            std.debug.print("Error: models.txt is empty.\n", .{});
+            return error.InvalidArgument;
+        }
+
         std.debug.print("Generating {d} devices...\n", .{self.count});
 
         for (0..self.count) |i| {
             const device_id = swarm_workspace.generateHexId();
+            const model = models.items[i % models.items.len];
             std.debug.print("  Creating Device [{d}/{d}]: {s}\n", .{ i + 1, self.count, &device_id });
 
             // Build path: {dir}/{id}/mocker
@@ -49,6 +62,9 @@ pub const GenerateDevicesCmd = struct {
             try store.save_config_value("PH_FACTORY_AUTOTOK", ws.autojoin_token);
 
             // Build merged device-meta JSON
+            const extra_pairs = [_][2][]const u8{
+                .{ "pantavisor.dtmodel", model },
+            };
             const device_meta = try swarm_workspace.buildMergedDeviceMeta(
                 allocator,
                 ws.base_json,
@@ -56,7 +72,7 @@ pub const GenerateDevicesCmd = struct {
                 ws.random_keys.items,
                 ws.group_key,
                 &device_id,
-                &.{},
+                &extra_pairs,
             );
             defer allocator.free(device_meta);
 

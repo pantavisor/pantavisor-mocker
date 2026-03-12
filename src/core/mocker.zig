@@ -310,13 +310,15 @@ pub const Mocker = struct {
         defer meta.deinit();
 
         var ph_client_ptr = try ctx.allocator.create(client_mod.Client);
-        errdefer ctx.allocator.destroy(ph_client_ptr);
-        ph_client_ptr.* = try client_mod.Client.init(
+        ph_client_ptr.* = client_mod.Client.init(
             ctx.allocator,
             cfg.pantahub_host.?,
             cfg.pantahub_port orelse "443",
             &log,
-        );
+        ) catch |err| {
+            ctx.allocator.destroy(ph_client_ptr);
+            return err;
+        };
         ph_client_ptr.use_https = cfg.pantahub_use_https;
         defer {
             ph_client_ptr.deinit();
@@ -772,7 +774,7 @@ fn check_tls_ownership(
 
                 try meta.update_local(store, cfg, extra_map);
 
-                log.log("Local metadata updated. Device 'rebooting' (simulated)...", .{});
+                log.log("Local metadata updated. Device can continue operating with existing token.", .{});
             } else {
                 log.log("TLS Ownership Validation FAILED. Retrying in next cycle...", .{});
             }
