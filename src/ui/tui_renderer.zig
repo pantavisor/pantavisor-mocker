@@ -16,12 +16,18 @@ pub const TuiRenderer = struct {
     ipc_thread: ?std.Thread = null,
     quit_flag: *std.atomic.Value(bool),
     render_mutex: std.Thread.Mutex,
+    // Backing buffer for the TTY writer. vaxis retains this slice for the life of
+    // the Tty, so it must live in the heap-allocated renderer — a stack-local
+    // buffer (as before) dangles the moment init() returns.
+    tty_buffer: [4096]u8 = undefined,
 
     pub fn init(allocator: std.mem.Allocator, quit_flag: *std.atomic.Value(bool)) !*TuiRenderer {
         const self = try allocator.create(TuiRenderer);
 
-        var posix_buffer: [16]u8 = undefined;
-        const tty = try vaxis.Tty.init(&posix_buffer);
+        // `self` is already allocated, so &self.tty_buffer is a stable address; the
+        // struct-literal assignment below only clobbers the (unused-at-init) buffer
+        // contents, not the pointer vaxis stored.
+        const tty = try vaxis.Tty.init(&self.tty_buffer);
         const vx = try vaxis.init(allocator, .{});
 
         self.* = .{

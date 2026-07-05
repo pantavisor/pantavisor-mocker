@@ -18,6 +18,9 @@ pub const LoggerSubsystem = struct {
     port: ?[]const u8 = null,
     token: ?[]const u8 = null,
     use_https: bool = true,
+    // Guards host/port/token/use_https/client, which the IPC run() thread writes
+    // (on subsystem_init) and the uploadLoop thread reads concurrently.
+    creds_mutex: std.Thread.Mutex = .{},
 
     // Buffering
     log_buffer: std.ArrayList(u8),
@@ -87,6 +90,8 @@ pub const LoggerSubsystem = struct {
                 .subsystem_init => {
                     if (msg.data) |data| {
                         if (data == .object) {
+                            self.creds_mutex.lock();
+                            defer self.creds_mutex.unlock();
                             if (self.client) |c| {
                                 c.deinit();
                                 self.allocator.destroy(c);
@@ -194,23 +199,38 @@ pub const LoggerSubsystem = struct {
 
             if (self.quit_flag.load(.acquire)) break;
 
-            if (self.host != null and self.port != null and self.token != null) {
+            // Build or refresh the client under the creds lock so the run() thread
+            // can't free host/port/token while we read them. The client keeps its
+            // own copies, so the slower push_logs call runs outside the lock.
+            self.creds_mutex.lock();
+            const have_creds = self.host != null and self.port != null and self.token != null;
+            if (have_creds) {
                 if (self.client == null) {
-                    self.client = self.allocator.create(client_mod.Client) catch continue;
-                    self.client.?.* = client_mod.Client.init(
-                        self.allocator,
-                        self.host.?,
-                        self.port.?,
-                        null,
-                    ) catch {
-                        self.allocator.destroy(self.client.?);
-                        self.client = null;
-                        continue;
-                    };
-                    self.client.?.use_https = self.use_https;
-                    self.client.?.token = self.allocator.dupe(u8, self.token.?) catch null;
+                    if (self.allocator.create(client_mod.Client)) |c| {
+                        if (client_mod.Client.init(self.allocator, self.host.?, self.port.?, null)) |built| {
+                            c.* = built;
+                            c.use_https = self.use_https;
+                            c.token = self.allocator.dupe(u8, self.token.?) catch null;
+                            self.client = c;
+                        } else |_| {
+                            self.allocator.destroy(c);
+                        }
+                    } else |_| {}
+                } else if (self.token) |tok| {
+                    // Pick up a token rotated in via a later subsystem_init.
+                    const stale = self.client.?.token == null or !std.mem.eql(u8, self.client.?.token.?, tok);
+                    if (stale) {
+                        if (self.allocator.dupe(u8, tok)) |newtok| {
+                            if (self.client.?.token) |oldtok| self.allocator.free(oldtok);
+                            self.client.?.token = newtok;
+                        } else |_| {}
+                    }
                 }
+            }
+            const client_ready = have_creds and self.client != null;
+            self.creds_mutex.unlock();
 
+            if (client_ready) {
                 log_pusher.push_logs(self.allocator, self.client.?, &self.store, self) catch |err| {
                     self.log("push_logs error: {any}", .{err});
                 };
