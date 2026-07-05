@@ -49,14 +49,19 @@ pub const Config = struct {
         try store.save_config_value("PH_CREDS_SECRET", secret);
         if (challenge) |c| try store.save_config_value("PH_CREDS_CHALLENGE", c);
 
+        // Dupe before freeing the old value: if the allocation fails, the field
+        // must not be left pointing at freed memory (deinit would double-free it).
+        const new_prn = try self.allocator.dupe(u8, prn);
         if (self.creds_prn) |v| self.allocator.free(v);
-        self.creds_prn = try self.allocator.dupe(u8, prn);
+        self.creds_prn = new_prn;
 
+        const new_secret = try self.allocator.dupe(u8, secret);
         if (self.creds_secret) |v| self.allocator.free(v);
-        self.creds_secret = try self.allocator.dupe(u8, secret);
+        self.creds_secret = new_secret;
 
+        const new_challenge = if (challenge) |c| try self.allocator.dupe(u8, c) else null;
         if (self.creds_challenge) |v| self.allocator.free(v);
-        self.creds_challenge = if (challenge) |c| try self.allocator.dupe(u8, c) else null;
+        self.creds_challenge = new_challenge;
     }
 
     pub fn set_claimed(self: *Config, store: local_store.LocalStore, claimed: bool) !void {
@@ -142,7 +147,10 @@ pub fn load(allocator: std.mem.Allocator, store: local_store.LocalStore, log: an
 
     // Check for ownership/cert.pem and key.pem
     const cert_path = try std.fs.path.join(allocator, &[_][]const u8{ store.base_path, "ownership", "cert.pem" });
-    const key_path = try std.fs.path.join(allocator, &[_][]const u8{ store.base_path, "ownership", "key.pem" });
+    const key_path = std.fs.path.join(allocator, &[_][]const u8{ store.base_path, "ownership", "key.pem" }) catch |err| {
+        allocator.free(cert_path);
+        return err;
+    };
 
     const cert_exists = blk: {
         std.fs.cwd().access(cert_path, .{}) catch break :blk false;

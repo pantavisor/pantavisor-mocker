@@ -8,6 +8,9 @@ pub const StdInOutRenderer = struct {
     ipc_client: ?ipc.IpcClient = null,
     ipc_thread: ?std.Thread = null,
     quit_flag: *std.atomic.Value(bool),
+    // Count of in-flight detached stdin-input threads; deinit waits for this to
+    // reach zero before freeing self so those threads can't use-after-free it.
+    input_threads: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     pub fn init(allocator: std.mem.Allocator, quit_flag: *std.atomic.Value(bool)) !*StdInOutRenderer {
         const self = try allocator.create(StdInOutRenderer);
@@ -75,15 +78,23 @@ pub const StdInOutRenderer = struct {
         std.debug.print("{s}", .{prompt});
         const stdin = std.fs.File.stdin();
 
-        if (timeout_ms) |t| {
+        // Poll stdin in short slices so a shutdown (quit_flag) unblocks us promptly
+        // instead of blocking indefinitely and outliving the renderer. A null
+        // timeout means wait until input arrives or shutdown is requested.
+        const deadline: ?i64 = if (timeout_ms) |t| std.time.milliTimestamp() + t else null;
+        while (!self.quit_flag.load(.acquire)) {
+            if (deadline) |dl| {
+                if (std.time.milliTimestamp() >= dl) return error.Timeout;
+            }
             var fds = [1]std.posix.pollfd{.{
                 .fd = stdin.handle,
                 .events = std.posix.POLL.IN,
                 .revents = 0,
             }};
-            const ready_count = try std.posix.poll(&fds, @intCast(t));
-            if (ready_count == 0) return error.Timeout;
+            const ready_count = try std.posix.poll(&fds, 200);
+            if (ready_count > 0) break;
         }
+        if (self.quit_flag.load(.acquire)) return error.Canceled;
 
         // Use simpler way to read from stdin
         var buf: [1024]u8 = undefined;
@@ -105,6 +116,11 @@ pub const StdInOutRenderer = struct {
             std.posix.shutdown(c.stream.handle, .both) catch {};
         }
         if (self.ipc_thread) |t| t.join();
+        // Wait for detached stdin-input threads to observe quit_flag and exit
+        // before freeing self/ipc_client, otherwise they use-after-free.
+        while (self.input_threads.load(.acquire) > 0) {
+            std.Thread.sleep(10 * std.time.ns_per_ms);
+        }
         if (self.ipc_client) |*c| c.deinit();
         self.allocator.destroy(self);
     }
@@ -155,17 +171,23 @@ pub const StdInOutRenderer = struct {
 
                         if (!invite_data.value.mandatory) {
                             // Start a thread to get input so we don't block the IPC listener
+                            _ = self.input_threads.fetchAdd(1, .monotonic);
                             if (std.Thread.spawn(.{}, handleInvitationInput, .{self})) |t| {
                                 t.detach();
-                            } else |_| {}
+                            } else |_| {
+                                _ = self.input_threads.fetchSub(1, .monotonic);
+                            }
                         }
                     }
                 },
                 .update_required => {
                     // Start a thread to get input for update
+                    _ = self.input_threads.fetchAdd(1, .monotonic);
                     if (std.Thread.spawn(.{}, handleUpdateInput, .{self})) |t| {
                         t.detach();
-                    } else |_| {}
+                    } else |_| {
+                        _ = self.input_threads.fetchSub(1, .monotonic);
+                    }
                 },
                 .subsystem_stop => {
                     self.quit_flag.store(true, .release);
@@ -176,6 +198,7 @@ pub const StdInOutRenderer = struct {
     }
 
     fn handleInvitationInput(self: *StdInOutRenderer) void {
+        defer _ = self.input_threads.fetchSub(1, .monotonic);
         const input = get_user_input(self, "Decision: ", null) catch return;
         defer self.allocator.free(input);
 
@@ -197,6 +220,7 @@ pub const StdInOutRenderer = struct {
     }
 
     fn handleUpdateInput(self: *StdInOutRenderer) void {
+        defer _ = self.input_threads.fetchSub(1, .monotonic);
         std.debug.print("UPDATE DECISION REQUIRED\n", .{});
         std.debug.print("An update cycle is in TESTING phase.\n", .{});
         std.debug.print("Select Outcome:\n", .{});
