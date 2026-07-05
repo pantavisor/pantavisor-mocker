@@ -13,6 +13,7 @@ pub const LoggerSubsystem = struct {
     quit_flag: *std.atomic.Value(bool),
     current_log_file: ?std.fs.File = null,
     current_rev: ?[]const u8 = null,
+    last_rev_check_ms: i64 = 0,
     upload_thread: ?std.Thread = null,
     host: ?[]const u8 = null,
     port: ?[]const u8 = null,
@@ -166,26 +167,33 @@ pub const LoggerSubsystem = struct {
     fn flushBufferLocked(self: *LoggerSubsystem) !void {
         if (self.log_buffer.items.len == 0) return;
 
-        const rev = try self.store.get_revision();
-        defer self.allocator.free(rev);
+        // The revision changes only when an update completes, so re-reading and
+        // re-parsing revision-info.json on every 1s flush is wasteful — gate it to
+        // once every 5s (and always on the first flush).
+        const now = std.time.milliTimestamp();
+        if (self.current_rev == null or (now - self.last_rev_check_ms) >= 5000) {
+            const rev = try self.store.get_revision();
+            defer self.allocator.free(rev);
+            self.last_rev_check_ms = now;
 
-        if (self.current_rev == null or !std.mem.eql(u8, self.current_rev.?, rev)) {
-            try self.store.init_log_dir(rev);
-            const path = try self.store.get_log_path(rev);
-            defer self.allocator.free(path);
+            if (self.current_rev == null or !std.mem.eql(u8, self.current_rev.?, rev)) {
+                try self.store.init_log_dir(rev);
+                const path = try self.store.get_log_path(rev);
+                defer self.allocator.free(path);
 
-            // Fully open the new file before touching current state, so a failure
-            // here can't leave a closed handle installed (which would fail every
-            // later write, grow the buffer unbounded, and double-close at deinit).
-            const new_file = try std.fs.cwd().createFile(path, .{ .read = true, .truncate = false });
-            errdefer new_file.close();
-            try new_file.seekFromEnd(0);
-            const new_rev = try self.allocator.dupe(u8, rev);
+                // Fully open the new file before touching current state, so a failure
+                // here can't leave a closed handle installed (which would fail every
+                // later write, grow the buffer unbounded, and double-close at deinit).
+                const new_file = try std.fs.cwd().createFile(path, .{ .read = true, .truncate = false });
+                errdefer new_file.close();
+                try new_file.seekFromEnd(0);
+                const new_rev = try self.allocator.dupe(u8, rev);
 
-            if (self.current_log_file) |f| f.close();
-            if (self.current_rev) |r| self.allocator.free(r);
-            self.current_log_file = new_file;
-            self.current_rev = new_rev;
+                if (self.current_log_file) |f| f.close();
+                if (self.current_rev) |r| self.allocator.free(r);
+                self.current_log_file = new_file;
+                self.current_rev = new_rev;
+            }
         }
 
         if (self.current_log_file) |file| {

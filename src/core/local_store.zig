@@ -89,6 +89,19 @@ pub const LocalStore = struct {
         };
     }
 
+    /// Lightweight read-only handle over an existing storage tree: skips the
+    /// directory/config/lock initialization that `init` performs. For request
+    /// handlers that only read existing files under base_path, so they don't pay
+    /// 6 makePath + several access/createFile syscalls on every request.
+    pub fn init_view(allocator: std.mem.Allocator, base_path: []const u8) !LocalStore {
+        std.debug.assert(base_path.len > 0);
+        return LocalStore{
+            .allocator = allocator,
+            .base_path = try allocator.dupe(u8, base_path),
+            .lock_file = null,
+        };
+    }
+
     fn validate_revision(rev: []const u8) !void {
         if (rev.len == 0) return error.InvalidRevision;
         for (rev) |c| {

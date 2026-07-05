@@ -410,7 +410,7 @@ pub const PvControlServer = struct {
     }
 
     fn readStateJson(self: *PvControlServer) ![]u8 {
-        var store = try local_store.LocalStore.init(self.allocator, self.context.storage_path, null, false);
+        var store = try local_store.LocalStore.init_view(self.allocator, self.context.storage_path);
         defer store.deinit();
 
         const revs = try store.get_revisions();
@@ -854,7 +854,7 @@ pub const PvControlServer = struct {
     }
 
     fn handleGetConfig(self: *PvControlServer) !http_parser.HttpResponse {
-        var store = try local_store.LocalStore.init(self.allocator, self.context.storage_path, null, false);
+        var store = try local_store.LocalStore.init_view(self.allocator, self.context.storage_path);
         defer store.deinit();
         const content = try store.read_config(self.allocator);
         return http_parser.HttpResponse{
@@ -866,7 +866,7 @@ pub const PvControlServer = struct {
     }
 
     fn handleGetConfig2(self: *PvControlServer) !http_parser.HttpResponse {
-        var store = try local_store.LocalStore.init(self.allocator, self.context.storage_path, null, false);
+        var store = try local_store.LocalStore.init_view(self.allocator, self.context.storage_path);
         defer store.deinit();
         const content = try store.read_config(self.allocator);
         defer self.allocator.free(content);
