@@ -71,7 +71,11 @@ pub const Router = struct {
         // For now, we'll use a separate thread for the listener and accept blocking.
 
         while (!self.quit_flag.load(.acquire)) {
-            const conn = server.accept() catch continue;
+            const conn = server.accept() catch {
+                // Back off on persistent accept errors so the loop can't busy-spin.
+                std.Thread.sleep(10 * std.time.ns_per_ms);
+                continue;
+            };
 
             if (self.active_connections.load(.acquire) >= MAX_CONNECTIONS) {
                 std.log.warn("Router: connection limit reached ({}), rejecting new connection", .{MAX_CONNECTIONS});
@@ -111,6 +115,12 @@ pub const Router = struct {
             if (msg.type == .subsystem_init and msg.to == .core) {
                 self.subsystems_mutex.lock();
                 defer self.subsystems_mutex.unlock();
+                // Close any previous connection for this subsystem before replacing
+                // it, otherwise a reconnecting subsystem leaks the old socket fd
+                // (it would only be closed at router shutdown).
+                if (self.subsystems.get(msg.from)) |old_stream| {
+                    if (old_stream.handle != stream.handle) old_stream.close();
+                }
                 try self.subsystems.put(msg.from, stream);
                 try self.subsystem_status.put(msg.from, .registered);
 

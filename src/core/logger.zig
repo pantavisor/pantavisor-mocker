@@ -96,10 +96,13 @@ pub const Logger = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        self.file.close();
+        // Open the new file before closing the old one: if createFile fails, the
+        // logger keeps a working handle instead of being left with a closed fd
+        // (which would silently drop every later write and double-close at deinit).
         const file = try std.fs.cwd().createFile(new_path, .{ .read = true, .truncate = false });
         try file.seekFromEnd(0);
         std.debug.assert(file.handle != -1);
+        self.file.close();
         self.file = file;
     }
 };

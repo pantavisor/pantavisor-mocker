@@ -60,6 +60,9 @@ pub const PvControlServer = struct {
     socket_path: []const u8,
     context: PvControlContext,
     server_thread: ?std.Thread = null,
+    active_connections: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+
+    const MAX_CONNECTIONS: usize = 64;
 
     pub fn init(allocator: std.mem.Allocator, storage_path: []const u8, quit_flag: *std.atomic.Value(bool), is_debug: bool, log: ?*logger.Logger) !PvControlServer {
         const socket_path = try std.fs.path.join(allocator, &[_][]const u8{ storage_path, "pantavisor", "pv-ctrl" });
@@ -111,15 +114,31 @@ pub const PvControlServer = struct {
 
         while (!self.context.quit_flag.load(.acquire)) {
             const conn = server.accept() catch {
+                // Back off on persistent accept errors (e.g. EMFILE) so the loop
+                // can't busy-spin a core with the fd table exhausted.
+                std.Thread.sleep(10 * std.time.ns_per_ms);
                 continue;
             };
 
-            const thread = try std.Thread.spawn(.{}, handleConnectionWrapper, .{ self, conn.stream });
+            // Bound concurrent handlers so a flood of connections can't spawn
+            // unbounded threads (and eventually fail spawn, killing the server).
+            if (self.active_connections.load(.acquire) >= MAX_CONNECTIONS) {
+                conn.stream.close();
+                continue;
+            }
+
+            _ = self.active_connections.fetchAdd(1, .monotonic);
+            const thread = std.Thread.spawn(.{}, handleConnectionWrapper, .{ self, conn.stream }) catch {
+                _ = self.active_connections.fetchSub(1, .monotonic);
+                conn.stream.close();
+                continue;
+            };
             thread.detach();
         }
     }
 
     fn handleConnectionWrapper(self: *PvControlServer, stream: std.net.Stream) void {
+        defer _ = self.active_connections.fetchSub(1, .monotonic);
         handleConnection(self, stream) catch |err| {
             std.log.err("PvControl connection handler error: {}", .{err});
         };

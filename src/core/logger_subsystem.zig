@@ -170,16 +170,22 @@ pub const LoggerSubsystem = struct {
         defer self.allocator.free(rev);
 
         if (self.current_rev == null or !std.mem.eql(u8, self.current_rev.?, rev)) {
-            if (self.current_log_file) |f| f.close();
-            if (self.current_rev) |r| self.allocator.free(r);
-
-            self.current_rev = try self.allocator.dupe(u8, rev);
             try self.store.init_log_dir(rev);
             const path = try self.store.get_log_path(rev);
             defer self.allocator.free(path);
 
-            self.current_log_file = try std.fs.cwd().createFile(path, .{ .read = true, .truncate = false });
-            try self.current_log_file.?.seekFromEnd(0);
+            // Fully open the new file before touching current state, so a failure
+            // here can't leave a closed handle installed (which would fail every
+            // later write, grow the buffer unbounded, and double-close at deinit).
+            const new_file = try std.fs.cwd().createFile(path, .{ .read = true, .truncate = false });
+            errdefer new_file.close();
+            try new_file.seekFromEnd(0);
+            const new_rev = try self.allocator.dupe(u8, rev);
+
+            if (self.current_log_file) |f| f.close();
+            if (self.current_rev) |r| self.allocator.free(r);
+            self.current_log_file = new_file;
+            self.current_rev = new_rev;
         }
 
         if (self.current_log_file) |file| {
