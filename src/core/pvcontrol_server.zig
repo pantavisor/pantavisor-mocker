@@ -173,23 +173,27 @@ pub const PvControlServer = struct {
         const buf = try self.allocator.alloc(u8, total_size);
         defer self.allocator.free(buf);
 
-        // Copy what we already read
-        @memcpy(buf[0..total_read], header_buf[0..total_read]);
+        // The initial header read may have already pulled in body bytes — and
+        // even bytes beyond this request if the client sent more than it declared.
+        // Never copy more than this request's own size, or the memcpy would
+        // overflow `buf` when Content-Length is smaller than what was buffered.
+        var filled = @min(total_read, total_size);
+        @memcpy(buf[0..filled], header_buf[0..filled]);
 
         // Read remaining body if Content-Length is specified
         if (content_length) |cl| {
             const body_start = headers_end.?;
-            var body_received = total_read - body_start;
+            var body_received = filled - body_start;
 
             while (body_received < cl) {
-                const n = try stream.read(buf[total_read..]);
+                const n = try stream.read(buf[filled..]);
                 if (n == 0) return; // Connection closed before full body
-                total_read += n;
+                filled += n;
                 body_received += n;
             }
         }
 
-        var request = http_parser.parseRequest(self.allocator, buf[0..total_read]) catch {
+        var request = http_parser.parseRequest(self.allocator, buf[0..filled]) catch {
             var resp = http_parser.HttpResponse{
                 .status_code = 400,
                 .status_text = "Bad Request",
@@ -700,6 +704,18 @@ pub const PvControlServer = struct {
 
     fn handleSteps(self: *PvControlServer, req: http_parser.HttpRequest) !http_parser.HttpResponse {
         const parts = if (req.path.len > "/steps/".len) req.path["/steps/".len..] else "";
+        // Reject directory traversal before `parts` is joined into a filesystem
+        // path (the sibling meta/object handlers validate their keys the same way).
+        if (parts.len > 0) {
+            validation.validate_file_path(parts) catch {
+                return http_parser.HttpResponse{
+                    .status_code = 400,
+                    .status_text = "Bad Request",
+                    .content_type = "text/plain",
+                    .body = try self.allocator.dupe(u8, "Invalid path"),
+                };
+            };
+        }
         const trails_dir = try std.fs.path.join(self.allocator, &[_][]const u8{ self.context.storage_path, "trails" });
         defer self.allocator.free(trails_dir);
 

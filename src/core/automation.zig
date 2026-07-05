@@ -73,7 +73,8 @@ pub const AutomationConfig = struct {
 
         // Parse seed
         if (automation_obj.object.get("seed")) |seed_val| {
-            if (seed_val == .integer) {
+            // Guard the cast: a negative seed would panic on @intCast to u64.
+            if (seed_val == .integer and seed_val.integer >= 0) {
                 cfg.seed = @intCast(seed_val.integer);
                 cfg.rng = std.Random.DefaultPrng.init(cfg.seed.?);
             }
@@ -83,13 +84,13 @@ pub const AutomationConfig = struct {
         if (automation_obj.object.get("invitation")) |inv_obj| {
             if (inv_obj == .object) {
                 if (inv_obj.object.get("accept")) |v| {
-                    if (v == .integer and v.integer >= 0) cfg.invitation.accept = @intCast(v.integer);
+                    if (v == .integer and v.integer >= 0 and v.integer <= 1_000_000) cfg.invitation.accept = @intCast(v.integer);
                 }
                 if (inv_obj.object.get("skip")) |v| {
-                    if (v == .integer and v.integer >= 0) cfg.invitation.skip = @intCast(v.integer);
+                    if (v == .integer and v.integer >= 0 and v.integer <= 1_000_000) cfg.invitation.skip = @intCast(v.integer);
                 }
                 if (inv_obj.object.get("later")) |v| {
-                    if (v == .integer and v.integer >= 0) cfg.invitation.later = @intCast(v.integer);
+                    if (v == .integer and v.integer >= 0 and v.integer <= 1_000_000) cfg.invitation.later = @intCast(v.integer);
                 }
             }
         }
@@ -98,16 +99,16 @@ pub const AutomationConfig = struct {
         if (automation_obj.object.get("update")) |upd_obj| {
             if (upd_obj == .object) {
                 if (upd_obj.object.get("done")) |v| {
-                    if (v == .integer and v.integer >= 0) cfg.update.done = @intCast(v.integer);
+                    if (v == .integer and v.integer >= 0 and v.integer <= 1_000_000) cfg.update.done = @intCast(v.integer);
                 }
                 if (upd_obj.object.get("updated")) |v| {
-                    if (v == .integer and v.integer >= 0) cfg.update.updated = @intCast(v.integer);
+                    if (v == .integer and v.integer >= 0 and v.integer <= 1_000_000) cfg.update.updated = @intCast(v.integer);
                 }
                 if (upd_obj.object.get("error")) |v| {
-                    if (v == .integer and v.integer >= 0) cfg.update.@"error" = @intCast(v.integer);
+                    if (v == .integer and v.integer >= 0 and v.integer <= 1_000_000) cfg.update.@"error" = @intCast(v.integer);
                 }
                 if (upd_obj.object.get("wontgo")) |v| {
-                    if (v == .integer and v.integer >= 0) cfg.update.wontgo = @intCast(v.integer);
+                    if (v == .integer and v.integer >= 0 and v.integer <= 1_000_000) cfg.update.wontgo = @intCast(v.integer);
                 }
             }
         }

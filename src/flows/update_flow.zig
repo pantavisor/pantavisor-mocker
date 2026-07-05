@@ -376,7 +376,7 @@ fn process_step(
 
     if (success) {
         if (step.state) |st| {
-            const state_json = try std.fmt.allocPrint(allocator, "{any}", .{std.json.fmt(st, .{})});
+            const state_json = try std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(st, .{})});
             defer allocator.free(state_json);
             try store.save_revision_state(rev_str, state_json);
         }

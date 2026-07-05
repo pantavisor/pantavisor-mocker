@@ -241,13 +241,13 @@ pub const TuiRenderer = struct {
                         }
                     } else if (self.state.awaiting_update) {
                         var resp: ?[]const u8 = null;
-                        if (key.matches('u', .{}) or key.matches('u', .{})) {
+                        if (key.matches('u', .{}) or key.matches('U', .{})) {
                             resp = "updated";
-                        } else if (key.matches('d', .{}) or key.matches('d', .{})) {
+                        } else if (key.matches('d', .{}) or key.matches('D', .{})) {
                             resp = "done";
-                        } else if (key.matches('e', .{}) or key.matches('e', .{})) {
+                        } else if (key.matches('e', .{}) or key.matches('E', .{})) {
                             resp = "error_status";
-                        } else if (key.matches('w', .{}) or key.matches('w', .{})) {
+                        } else if (key.matches('w', .{}) or key.matches('W', .{})) {
                             resp = "wontgo";
                         }
 

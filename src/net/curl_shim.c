@@ -88,6 +88,11 @@ CURLcode curl_shim_simple_request(const char *url, const char *method, const cha
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
 
+    // Bound each transfer so a stalled or half-open connection fails instead of
+    // hanging the calling thread (the log uploader and the main poll loop) forever.
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
+
     CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_OK) {
         *response = buf.data;

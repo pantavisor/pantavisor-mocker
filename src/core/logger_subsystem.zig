@@ -129,8 +129,11 @@ pub const LoggerSubsystem = struct {
         self.buffer_mutex.lock();
         defer self.buffer_mutex.unlock();
 
-        var buf: [4096]u8 = undefined;
-        const line = try std.fmt.bufPrint(&buf, "[{s}] {s}\n", .{ msg.subsystem, msg.message });
+        // Format on the heap: a fixed stack buffer would return NoSpaceLeft for an
+        // over-length line, propagating out of the run loop and permanently killing
+        // the logger subsystem for the rest of the process.
+        const line = try std.fmt.allocPrint(self.allocator, "[{s}] {s}\n", .{ msg.subsystem, msg.message });
+        defer self.allocator.free(line);
         try self.log_buffer.appendSlice(self.allocator, line);
 
         if (self.log_buffer.items.len > 4096) {
