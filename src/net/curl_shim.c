@@ -64,7 +64,7 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata) {
     return realsize;
 }
 
-CURLcode curl_shim_simple_request(const char *url, const char *method, const char *payload, struct curl_slist *headers, char **response, size_t *response_len) {
+CURLcode curl_shim_simple_request(const char *url, const char *method, const char *payload, struct curl_slist *headers, char **response, size_t *response_len, long *status_code) {
     CURL *curl = curl_easy_init();
     if (!curl) return CURLE_FAILED_INIT;
 
@@ -97,6 +97,11 @@ CURLcode curl_shim_simple_request(const char *url, const char *method, const cha
     if (res == CURLE_OK) {
         *response = buf.data;
         *response_len = buf.size;
+        if (status_code) {
+            long code = 0;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+            *status_code = code;
+        }
     } else {
         free(buf.data);
     }

@@ -239,7 +239,18 @@ pub const Client = struct {
         }
         defer if (slist != null) curl_mod.slist_free_all(slist);
 
-        return try curl_mod.Curl.simple_request(url, method, body, slist, self.allocator);
+        var status: c_long = 0;
+        const resp = try curl_mod.Curl.simple_request(url, method, body, slist, self.allocator, &status);
+        // Treat HTTP errors as failures instead of returning the error body as if
+        // it were a valid response (which silently dropped pushed logs on a 401
+        // and produced confusing JSON-shape errors elsewhere).
+        if (status >= 400) {
+            const preview = if (resp.len > 512) resp[0..512] else resp;
+            self.log("HTTP {d} from {s} {s}: {s}", .{ status, method, url, preview });
+            self.allocator.free(resp);
+            return error.HttpRequestFailed;
+        }
+        return resp;
     }
 
     pub fn login(self: *Client, prn: []const u8, secret: []const u8) !void {

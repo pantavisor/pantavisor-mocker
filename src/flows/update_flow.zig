@@ -298,7 +298,7 @@ fn process_step(
             };
 
             log.log("Downloading object '{s}' from {s}", .{ obj.objectname, download_url });
-            const content = try @import("../net/curl.zig").Curl.simple_request(download_url, "GET", null, null, allocator);
+            const content = try @import("../net/curl.zig").Curl.simple_request(download_url, "GET", null, null, allocator, null);
             defer allocator.free(content);
 
             const file = try std.fs.cwd().createFile(dest_path, .{});
