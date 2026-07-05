@@ -1,0 +1,32 @@
+name: CI
+
+# Build and test on every branch push and pull request. The release/publish
+# pipeline in docker-publish.yml stays scoped to main/tags; this job just
+# provides a fast build+test signal for development branches (mirrors the
+# GitLab `test` job).
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install libcurl development headers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
+
+      - name: Install Zig 0.15.2
+        run: |
+          curl -fL https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz -o zig.tar.xz
+          sudo tar -xJf zig.tar.xz --strip-components=1 -C /usr/local/bin
+          rm zig.tar.xz
+          zig version
+
+      - name: Build (ReleaseSafe)
+        run: zig build --release=safe -Doptimize=ReleaseSafe
+
+      - name: Test
+        run: zig build test
