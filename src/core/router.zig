@@ -35,6 +35,26 @@ pub const Router = struct {
     }
 
     pub fn deinit(self: *Router) void {
+        self.quit_flag.store(true, .release);
+
+        // Unblock any detached handler threads still blocked on read by shutting
+        // down their sockets, then wait for them to exit before closing/freeing the
+        // streams. Handlers never close their own stream, so closing here while one
+        // is still reading would be a use-after-close / double-close race.
+        {
+            self.subsystems_mutex.lock();
+            defer self.subsystems_mutex.unlock();
+            var it = self.subsystems.valueIterator();
+            while (it.next()) |stream| {
+                std.posix.shutdown(stream.handle, .both) catch {};
+            }
+        }
+
+        var spins: usize = 0;
+        while (self.active_connections.load(.acquire) > 0 and spins < 500) : (spins += 1) {
+            std.Thread.sleep(10 * std.time.ns_per_ms);
+        }
+
         self.subsystems_mutex.lock();
         defer self.subsystems_mutex.unlock();
         var it = self.subsystems.valueIterator();
