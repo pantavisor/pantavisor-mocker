@@ -146,6 +146,19 @@ pub const PvControlServer = struct {
         };
     }
 
+    fn writeSimpleResponse(self: *PvControlServer, stream: std.net.Stream, status: u16, status_text: []const u8, content_type: []const u8, body: []const u8) !void {
+        var resp = http_parser.HttpResponse{
+            .status_code = status,
+            .status_text = status_text,
+            .content_type = content_type,
+            .body = try self.allocator.dupe(u8, body),
+        };
+        defer resp.deinit(self.allocator);
+        const bytes = try resp.serialize(self.allocator);
+        defer self.allocator.free(bytes);
+        _ = try stream.write(bytes);
+    }
+
     fn handleConnection(self: *PvControlServer, stream: std.net.Stream) !void {
         defer stream.close();
 
@@ -201,18 +214,27 @@ pub const PvControlServer = struct {
         const body_limit = if (is_object_put) MAX_OBJECT_SIZE else MAX_BODY_SIZE;
         if (content_length) |cl| {
             if (cl > body_limit) {
-                var resp = http_parser.HttpResponse{
-                    .status_code = 413,
-                    .status_text = "Payload Too Large",
-                    .content_type = "text/plain",
-                    .body = try self.allocator.dupe(u8, "Request body too large"),
-                };
-                defer resp.deinit(self.allocator);
-                const bytes = try resp.serialize(self.allocator);
-                defer self.allocator.free(bytes);
-                _ = try stream.write(bytes);
+                try self.writeSimpleResponse(stream, 413, "Payload Too Large", "text/plain", "Request body too large");
                 return;
             }
+        }
+
+        // Object uploads are streamed to disk (hashing as bytes arrive) instead
+        // of being buffered: a container image can be hundreds of MB, and the
+        // generic path below would hold the entire body in memory.
+        if (is_object_put) {
+            const cl = content_length orelse {
+                try self.writeSimpleResponse(stream, 411, "Length Required", "text/plain", "Content-Length required for object upload");
+                return;
+            };
+            const line_end = std.mem.indexOf(u8, headers_data, "\r\n") orelse headers_data.len;
+            var parts = std.mem.splitScalar(u8, headers_data[0..line_end], ' ');
+            _ = parts.next(); // "PUT"
+            const path = parts.next() orelse "";
+            const sha = path["/objects/".len..];
+            const prefill = header_buf[headers_end.?..total_read];
+            try self.handleObjectUpload(stream, sha, prefill, cl);
+            return;
         }
 
         // Allocate buffer for full request (headers + body) dynamically
@@ -241,16 +263,7 @@ pub const PvControlServer = struct {
         }
 
         var request = http_parser.parseRequest(self.allocator, buf[0..filled]) catch {
-            var resp = http_parser.HttpResponse{
-                .status_code = 400,
-                .status_text = "Bad Request",
-                .content_type = "text/plain",
-                .body = try self.allocator.dupe(u8, "Malformed HTTP request"),
-            };
-            defer resp.deinit(self.allocator);
-            const bytes = try resp.serialize(self.allocator);
-            defer self.allocator.free(bytes);
-            _ = try stream.write(bytes);
+            try self.writeSimpleResponse(stream, 400, "Bad Request", "text/plain", "Malformed HTTP request");
             return;
         };
         defer request.deinit(self.allocator);
@@ -261,6 +274,75 @@ pub const PvControlServer = struct {
         const response_bytes = try res.serialize(self.allocator);
         defer self.allocator.free(response_bytes);
         _ = try stream.write(response_bytes);
+    }
+
+    /// Streams a PUT /objects/<sha> body from the socket straight into the
+    /// objects directory, hashing incrementally, so memory use stays at one
+    /// chunk regardless of object size. The body is written to a `.upload-`
+    /// temp file and only renamed to its sha name once the hash verifies, so a
+    /// truncated or corrupt upload can never appear as a valid object.
+    /// `prefill` is whatever body bytes the header read already pulled in.
+    fn handleObjectUpload(self: *PvControlServer, stream: std.net.Stream, sha: []const u8, prefill: []const u8, content_length: usize) !void {
+        validation.validate_sha256(sha) catch {
+            try self.writeSimpleResponse(stream, 400, "Bad Request", "text/plain", "Invalid SHA256");
+            return;
+        };
+
+        const objects_dir = try std.fs.path.join(self.allocator, &[_][]const u8{ self.context.storage_path, "objects" });
+        defer self.allocator.free(objects_dir);
+        std.fs.cwd().makePath(objects_dir) catch {};
+
+        // sha is validated hex, so it can't traverse; concurrent uploads of the
+        // same sha share the temp name, but they write identical content and
+        // the final rename is atomic, so the worst case is redundant work.
+        const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}/.upload-{s}", .{ objects_dir, sha });
+        defer self.allocator.free(tmp_path);
+        const final_path = try std.fs.path.join(self.allocator, &[_][]const u8{ objects_dir, sha });
+        defer self.allocator.free(final_path);
+
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var received: usize = 0;
+        {
+            const file = try std.fs.cwd().createFile(tmp_path, .{});
+            defer file.close();
+            errdefer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+            const pre = prefill[0..@min(prefill.len, content_length)];
+            try file.writeAll(pre);
+            hasher.update(pre);
+            received = pre.len;
+
+            var chunk: [64 * 1024]u8 = undefined;
+            while (received < content_length) {
+                const want = @min(chunk.len, content_length - received);
+                const n = try stream.read(chunk[0..want]);
+                if (n == 0) break; // Connection closed before full body
+                try file.writeAll(chunk[0..n]);
+                hasher.update(chunk[0..n]);
+                received += n;
+            }
+        }
+
+        // From here on, any error path must not leave the temp file behind
+        // (after a successful rename this is a harmless ENOENT).
+        errdefer std.fs.cwd().deleteFile(tmp_path) catch {};
+
+        if (received < content_length) {
+            std.fs.cwd().deleteFile(tmp_path) catch {};
+            return; // Client vanished mid-upload; nobody to respond to.
+        }
+
+        var hash: [32]u8 = undefined;
+        hasher.final(&hash);
+        const hex = std.fmt.bytesToHex(hash, .lower);
+        if (!std.mem.eql(u8, sha, &hex)) {
+            std.fs.cwd().deleteFile(tmp_path) catch {};
+            try self.writeSimpleResponse(stream, 400, "Bad Request", "text/plain", "SHA256 mismatch");
+            return;
+        }
+
+        try std.fs.cwd().rename(tmp_path, final_path);
+        try self.writeSimpleResponse(stream, 200, "OK", "application/json", "{\"status\":\"ok\"}");
     }
 
     fn dispatch(self: *PvControlServer, req: http_parser.HttpRequest) !http_parser.HttpResponse {
