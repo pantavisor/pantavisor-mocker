@@ -38,3 +38,6 @@ jobs:
 
       - name: Test
         run: zig build test
+
+      - name: End-to-end tests (real binary)
+        run: zig build e2e
