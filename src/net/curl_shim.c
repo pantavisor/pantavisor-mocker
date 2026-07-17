@@ -64,7 +64,7 @@ static size_t write_cb(void *ptr, size_t size, size_t nmemb, void *userdata) {
     return realsize;
 }
 
-CURLcode curl_shim_simple_request(const char *url, const char *method, const char *payload, struct curl_slist *headers, char **response, size_t *response_len) {
+CURLcode curl_shim_simple_request(const char *url, const char *method, const char *payload, struct curl_slist *headers, char **response, size_t *response_len, long *status_code) {
     CURL *curl = curl_easy_init();
     if (!curl) return CURLE_FAILED_INIT;
 
@@ -88,10 +88,24 @@ CURLcode curl_shim_simple_request(const char *url, const char *method, const cha
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
 
+    // Bound stalled or half-open connections so they fail instead of hanging the
+    // calling thread (the log uploader and the main poll loop) forever. Stall
+    // detection (<100 bytes/s for 60s) rather than a hard total cap: a hard
+    // CURLOPT_TIMEOUT would also abort legitimate large, slow object downloads
+    // that are still making progress.
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 100L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);
+
     CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_OK) {
         *response = buf.data;
         *response_len = buf.size;
+        if (status_code) {
+            long code = 0;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+            *status_code = code;
+        }
     } else {
         free(buf.data);
     }

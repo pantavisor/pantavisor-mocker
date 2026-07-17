@@ -16,12 +16,21 @@ pub const TuiRenderer = struct {
     ipc_thread: ?std.Thread = null,
     quit_flag: *std.atomic.Value(bool),
     render_mutex: std.Thread.Mutex,
+    // Backing buffer for the TTY writer. vaxis retains this slice for the life of
+    // the Tty, so it must live in the heap-allocated renderer — a stack-local
+    // buffer (as before) dangles the moment init() returns.
+    tty_buffer: [4096]u8 = undefined,
 
     pub fn init(allocator: std.mem.Allocator, quit_flag: *std.atomic.Value(bool)) !*TuiRenderer {
         const self = try allocator.create(TuiRenderer);
+        errdefer allocator.destroy(self);
 
-        var posix_buffer: [16]u8 = undefined;
-        const tty = try vaxis.Tty.init(&posix_buffer);
+        // `self` is already allocated, so &self.tty_buffer is a stable address; the
+        // struct-literal assignment below only clobbers the (unused-at-init) buffer
+        // contents, not the pointer vaxis stored.
+        var tty = try vaxis.Tty.init(&self.tty_buffer);
+        // Without this, a failure below leaves the user's terminal in raw mode.
+        errdefer tty.deinit();
         const vx = try vaxis.init(allocator, .{});
 
         self.* = .{
@@ -39,8 +48,17 @@ pub const TuiRenderer = struct {
             .render_mutex = .{},
         };
 
+        errdefer {
+            self.state.deinit();
+            self.arena.deinit();
+            self.vx.deinit(allocator, self.tty.writer());
+        }
+
         try self.loop.init();
         try self.loop.start();
+        // The loop's reader thread touches self.tty — stop it before the tty
+        // errdefer tears the terminal down.
+        errdefer self.loop.stop();
 
         try self.vx.enterAltScreen(self.tty.writer());
         try self.vx.queryTerminal(self.tty.writer(), 1 * std.time.ns_per_s);
@@ -212,84 +230,98 @@ pub const TuiRenderer = struct {
     pub fn run(self: *TuiRenderer) !void {
         while (!self.state.should_quit and !self.quit_flag.load(.acquire)) {
             _ = self.arena.reset(.retain_capacity);
-            var event = self.loop.tryEvent();
-            if (event == null) {
+
+            // Drain all currently-queued events, then render once. Rendering per
+            // event caused a full relayout for every line during log bursts. The
+            // cap bounds a single drain so a flood can't starve rendering.
+            var processed: usize = 0;
+            while (processed < 256) : (processed += 1) {
+                var event = self.loop.tryEvent() orelse break;
+                defer event.deinit(self.allocator);
+                try self.handleEvent(&event);
+                if (self.state.should_quit or self.quit_flag.load(.acquire)) break;
+            }
+
+            if (processed == 0) {
                 std.Thread.sleep(10 * std.time.ns_per_ms);
                 continue;
             }
-            defer event.?.deinit(self.allocator);
-            switch (event.?) {
-                .key_press => |key| {
-                    if (key.matches('c', .{ .ctrl = true })) {
-                        self.state.should_quit = true;
-                        self.quit_flag.store(true, .release);
-                    } else if (self.state.awaiting_invitation) {
-                        var resp: ?[]const u8 = null;
-                        if (key.matches('a', .{}) or key.matches('A', .{})) {
-                            resp = "accept";
-                        } else if (key.matches('s', .{}) or key.matches('S', .{})) {
-                            resp = "skip";
-                        } else if (key.matches('l', .{}) or key.matches('L', .{})) {
-                            resp = "later";
-                        }
 
-                        if (resp) |r| {
-                            if (self.ipc_client) |*client| {
-                                client.sendMessage(.background_job, .user_response, .{ .string = r }) catch {};
-                            }
-                            self.state.awaiting_invitation = false;
-                        }
-                    } else if (self.state.awaiting_update) {
-                        var resp: ?[]const u8 = null;
-                        if (key.matches('u', .{}) or key.matches('u', .{})) {
-                            resp = "updated";
-                        } else if (key.matches('d', .{}) or key.matches('d', .{})) {
-                            resp = "done";
-                        } else if (key.matches('e', .{}) or key.matches('e', .{})) {
-                            resp = "error_status";
-                        } else if (key.matches('w', .{}) or key.matches('w', .{})) {
-                            resp = "wontgo";
-                        }
-
-                        if (resp) |r| {
-                            if (self.ipc_client) |*client| {
-                                client.sendMessage(.background_job, .user_response, .{ .string = r }) catch {};
-                            }
-                            self.state.awaiting_update = false;
-                        }
-                    }
-                },
-                .winsize => |ws| try self.vx.resize(self.allocator, self.tty.writer(), ws),
-                .log_message => |log_msg| {
-                    try self.state.add_log(log_msg.message);
-                },
-                .invitation => |*inv| {
-                    try self.state.set_invitation(inv.*);
-                    inv.id = "";
-                    inv.description = "";
-                    inv.from = "";
-                    inv.deployment = "";
-                    inv.release = "";
-                    inv.vendorRelease = null;
-                    inv.earliestUpdate = null;
-                    inv.latestUpdate = null;
-                },
-                .progress => |*p| {
-                    try self.state.update_progress(p.*);
-                    p.status = "";
-                    p.@"status-msg" = "";
-                    p.revision = "";
-                },
-                .update_prompt => {
-                    self.state.awaiting_update = true;
-                },
-                .quit => self.state.should_quit = true,
-                else => {},
-            }
             self.render_mutex.lock();
             defer self.render_mutex.unlock();
             try tui.render(&self.vx, &self.state, self.arena.allocator());
             try self.vx.render(self.tty.writer());
+        }
+    }
+
+    fn handleEvent(self: *TuiRenderer, event: *tui.Event) !void {
+        switch (event.*) {
+            .key_press => |key| {
+                if (key.matches('c', .{ .ctrl = true })) {
+                    self.state.should_quit = true;
+                    self.quit_flag.store(true, .release);
+                } else if (self.state.awaiting_invitation) {
+                    var resp: ?[]const u8 = null;
+                    if (key.matches('a', .{}) or key.matches('A', .{})) {
+                        resp = "accept";
+                    } else if (key.matches('s', .{}) or key.matches('S', .{})) {
+                        resp = "skip";
+                    } else if (key.matches('l', .{}) or key.matches('L', .{})) {
+                        resp = "later";
+                    }
+
+                    if (resp) |r| {
+                        if (self.ipc_client) |*client| {
+                            client.sendMessage(.background_job, .user_response, .{ .string = r }) catch {};
+                        }
+                        self.state.awaiting_invitation = false;
+                    }
+                } else if (self.state.awaiting_update) {
+                    var resp: ?[]const u8 = null;
+                    if (key.matches('u', .{}) or key.matches('U', .{})) {
+                        resp = "updated";
+                    } else if (key.matches('d', .{}) or key.matches('D', .{})) {
+                        resp = "done";
+                    } else if (key.matches('e', .{}) or key.matches('E', .{})) {
+                        resp = "error_status";
+                    } else if (key.matches('w', .{}) or key.matches('W', .{})) {
+                        resp = "wontgo";
+                    }
+
+                    if (resp) |r| {
+                        if (self.ipc_client) |*client| {
+                            client.sendMessage(.background_job, .user_response, .{ .string = r }) catch {};
+                        }
+                        self.state.awaiting_update = false;
+                    }
+                }
+            },
+            .winsize => |ws| try self.vx.resize(self.allocator, self.tty.writer(), ws),
+            .log_message => |log_msg| {
+                try self.state.add_log(log_msg.message);
+            },
+            .invitation => |*inv| {
+                try self.state.set_invitation(inv.*);
+                inv.id = "";
+                inv.description = "";
+                inv.from = "";
+                inv.deployment = "";
+                inv.release = "";
+                inv.vendorRelease = null;
+                inv.earliestUpdate = null;
+                inv.latestUpdate = null;
+            },
+            .progress => |*p| {
+                try self.state.update_progress(p.*);
+                p.status = "";
+                p.@"status-msg" = "";
+                p.revision = "";
+            },
+            .update_prompt => {
+                self.state.awaiting_update = true;
+            },
+            .quit => self.state.should_quit = true,
+            else => {},
         }
     }
 };

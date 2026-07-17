@@ -49,14 +49,19 @@ pub const Config = struct {
         try store.save_config_value("PH_CREDS_SECRET", secret);
         if (challenge) |c| try store.save_config_value("PH_CREDS_CHALLENGE", c);
 
+        // Dupe before freeing the old value: if the allocation fails, the field
+        // must not be left pointing at freed memory (deinit would double-free it).
+        const new_prn = try self.allocator.dupe(u8, prn);
         if (self.creds_prn) |v| self.allocator.free(v);
-        self.creds_prn = try self.allocator.dupe(u8, prn);
+        self.creds_prn = new_prn;
 
+        const new_secret = try self.allocator.dupe(u8, secret);
         if (self.creds_secret) |v| self.allocator.free(v);
-        self.creds_secret = try self.allocator.dupe(u8, secret);
+        self.creds_secret = new_secret;
 
+        const new_challenge = if (challenge) |c| try self.allocator.dupe(u8, c) else null;
         if (self.creds_challenge) |v| self.allocator.free(v);
-        self.creds_challenge = if (challenge) |c| try self.allocator.dupe(u8, c) else null;
+        self.creds_challenge = new_challenge;
     }
 
     pub fn set_claimed(self: *Config, store: local_store.LocalStore, claimed: bool) !void {
@@ -89,9 +94,11 @@ pub fn load(allocator: std.mem.Allocator, store: local_store.LocalStore, log: an
     var it = std.mem.splitScalar(u8, config_content, '\n');
     while (it.next()) |line| {
         if (line.len == 0 or line[0] == '#') continue;
-        var parts = std.mem.splitScalar(u8, line, '=');
-        const key = parts.first();
-        const value = parts.next() orelse continue;
+        // Split on the first '=' only so values containing '=' (e.g. base64
+        // padding in tokens/secrets) are preserved instead of truncated.
+        const eq_idx = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const key = line[0..eq_idx];
+        const value = line[eq_idx + 1 ..];
         const trimmed_value = std.mem.trim(u8, value, " \t\r");
         if (trimmed_value.len == 0) continue;
 
@@ -126,9 +133,11 @@ pub fn load(allocator: std.mem.Allocator, store: local_store.LocalStore, log: an
         } else if (std.mem.eql(u8, key, "PH_IS_CLAIMED")) {
             cfg.is_claimed = std.mem.eql(u8, trimmed_value, "1");
         } else if (std.mem.eql(u8, key, "PH_METADATA_DEVMETA_INTERVAL")) {
-            cfg.devmeta_interval_s = std.fmt.parseInt(u64, trimmed_value, 10) catch 60;
+            // Cap to 24h: the value is later multiplied by 1000 into an i64, so an
+            // unbounded u64 would overflow / panic on the interval arithmetic.
+            cfg.devmeta_interval_s = @min(std.fmt.parseInt(u64, trimmed_value, 10) catch 60, 86_400);
         } else if (std.mem.eql(u8, key, "PH_METADATA_USRMETA_INTERVAL")) {
-            cfg.usrmeta_interval_s = std.fmt.parseInt(u64, trimmed_value, 10) catch 60;
+            cfg.usrmeta_interval_s = @min(std.fmt.parseInt(u64, trimmed_value, 10) catch 60, 86_400);
         } else if (std.mem.eql(u8, key, "factory.autotok") or std.mem.eql(u8, key, "PH_FACTORY_AUTOTOK")) {
             if (cfg.factory_autotok) |v| allocator.free(v);
             cfg.factory_autotok = try allocator.dupe(u8, trimmed_value);
@@ -138,7 +147,10 @@ pub fn load(allocator: std.mem.Allocator, store: local_store.LocalStore, log: an
 
     // Check for ownership/cert.pem and key.pem
     const cert_path = try std.fs.path.join(allocator, &[_][]const u8{ store.base_path, "ownership", "cert.pem" });
-    const key_path = try std.fs.path.join(allocator, &[_][]const u8{ store.base_path, "ownership", "key.pem" });
+    const key_path = std.fs.path.join(allocator, &[_][]const u8{ store.base_path, "ownership", "key.pem" }) catch |err| {
+        allocator.free(cert_path);
+        return err;
+    };
 
     const cert_exists = blk: {
         std.fs.cwd().access(cert_path, .{}) catch break :blk false;

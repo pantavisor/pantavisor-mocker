@@ -239,7 +239,19 @@ pub const Client = struct {
         }
         defer if (slist != null) curl_mod.slist_free_all(slist);
 
-        return try curl_mod.Curl.simple_request(url, method, body, slist, self.allocator);
+        var status: c_long = 0;
+        const resp = try curl_mod.Curl.simple_request(url, method, body, slist, self.allocator, &status);
+        // Treat HTTP errors as failures instead of returning the error body as if
+        // it were a valid response (which silently dropped pushed logs on a 401
+        // and produced confusing JSON-shape errors elsewhere).
+        if (status >= 400) {
+            // Log status and size only — error bodies can echo request contents
+            // (credentials included), and these logs are themselves uploaded.
+            self.log("HTTP {d} from {s} {s} ({d}-byte error body)", .{ status, method, url, resp.len });
+            self.allocator.free(resp);
+            return error.HttpRequestFailed;
+        }
+        return resp;
     }
 
     pub fn login(self: *Client, prn: []const u8, secret: []const u8) !void {
@@ -520,6 +532,7 @@ pub const Client = struct {
         self.allocator.free(s.progress.status);
         self.allocator.free(s.progress.@"status-msg");
         self.allocator.free(s.progress.logs);
+        if (s.progress.downloads.objects) |objs| self.free_json_value(objs);
 
         if (s.@"commit-msg") |m| self.allocator.free(m);
         if (s.committer) |c| self.allocator.free(c);
@@ -611,6 +624,14 @@ pub const Client = struct {
         new_step.progress.logs = try allocator.dupe(u8, s.progress.logs);
         errdefer allocator.free(new_step.progress.logs);
 
+        // Deep-clone the downloads JSON value. The shallow struct copy above only
+        // duplicated the pointer, which aliases the caller's parse arena that is
+        // freed before the cloned Step is returned (use-after-free).
+        if (s.progress.downloads.objects) |objs| {
+            new_step.progress.downloads.objects = try clone_json_value(allocator, objs);
+        } else new_step.progress.downloads.objects = null;
+        errdefer if (new_step.progress.downloads.objects) |objs| free_json_value_standalone(allocator, objs);
+
         if (s.@"commit-msg") |msg| {
             new_step.@"commit-msg" = try allocator.dupe(u8, msg);
         } else new_step.@"commit-msg" = null;
@@ -636,6 +657,12 @@ pub const Client = struct {
             }
             new_step.used_objects = new_objs;
         } else new_step.used_objects = null;
+        // Function-scoped cleanup: the block-scoped errdefer above is discarded on
+        // normal exit, so a later clone failure (state/meta) would otherwise leak this.
+        errdefer if (new_step.used_objects) |used| {
+            for (used) |o| allocator.free(o);
+            allocator.free(used);
+        };
 
         if (s.state) |st| {
             new_step.state = try clone_json_value(allocator, st);

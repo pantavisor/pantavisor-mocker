@@ -92,12 +92,14 @@ pub fn get_storage(path: []const u8) !SysInfo.Storage {
     const path_z = try std.posix.toPosixPath(path);
     var s: c.struct_statvfs = undefined;
     if (c.statvfs(&path_z, &s) != 0) return error.StatVfsFailed;
-    std.debug.assert(s.f_blocks > 0);
 
     const total = @as(u64, s.f_blocks) * s.f_frsize;
     const free = @as(u64, s.f_bfree) * s.f_frsize;
     const real_free = @as(u64, s.f_bavail) * s.f_frsize;
-    const reserved = free - real_free;
+    // Saturating: some network/FUSE filesystems report f_bavail > f_bfree, which
+    // would underflow a plain subtraction and panic. Pseudo-filesystems can also
+    // report f_blocks == 0, so no assertion on it either.
+    const reserved = free -| real_free;
 
     return .{
         .total = total,
