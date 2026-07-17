@@ -110,6 +110,37 @@ pub const Client = struct {
     token: ?[]const u8 = null,
     use_https: bool = true,
 
+    pub fn isLocalAddress(host: []const u8) bool {
+        if (std.mem.eql(u8, host, "localhost")) return true;
+
+        var it = std.mem.splitScalar(u8, host, '.');
+        var parts: [4]u8 = undefined;
+        var i: usize = 0;
+        while (it.next()) |part| {
+            if (i >= 4) return false;
+            const val = std.fmt.parseInt(u8, part, 10) catch return false;
+            parts[i] = val;
+            i += 1;
+        }
+        if (i != 4) return false;
+
+        const a = parts[0];
+        const b = parts[1];
+
+        // 127.0.0.0/8 (Loopback)
+        if (a == 127) return true;
+        // 10.0.0.0/8 (Private)
+        if (a == 10) return true;
+        // 172.16.0.0/12 (Private)
+        if (a == 172 and b >= 16 and b <= 31) return true;
+        // 192.168.0.0/16 (Private)
+        if (a == 192 and b == 168) return true;
+        // 169.254.0.0/16 (Link-local)
+        if (a == 169 and b == 254) return true;
+
+        return false;
+    }
+
     fn isLocalHost(host: []const u8) bool {
         return std.mem.eql(u8, host, "127.0.0.1") or std.mem.eql(u8, host, "localhost");
     }
@@ -131,7 +162,7 @@ pub const Client = struct {
             .pantahub_host = try allocator.dupe(u8, host),
             .pantahub_port = try allocator.dupe(u8, port),
             .logger = logger,
-            .use_https = !isLocalHost(host),
+            .use_https = !isLocalAddress(host),
         };
     }
 

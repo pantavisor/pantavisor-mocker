@@ -87,6 +87,11 @@ pub const LoggerSubsystem = struct {
                 .subsystem_init => {
                     if (msg.data) |data| {
                         if (data == .object) {
+                            if (self.client) |c| {
+                                c.deinit();
+                                self.allocator.destroy(c);
+                                self.client = null;
+                            }
                             if (data.object.get("host")) |h| {
                                 if (self.host) |old| self.allocator.free(old);
                                 self.host = try self.allocator.dupe(u8, h.string);

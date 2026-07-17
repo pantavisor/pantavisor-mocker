@@ -700,6 +700,7 @@ fn ensure_registered_and_logged_in(
             try map.put("host", .{ .string = cfg.pantahub_host.? });
             try map.put("port", .{ .string = cfg.pantahub_port orelse "443" });
             try map.put("token", .{ .string = ph_client.token.? });
+            try map.put("use_https", .{ .bool = cfg.pantahub_use_https });
             try client.sendMessage(.logger, .subsystem_init, .{ .object = map });
         }
 
@@ -717,6 +718,7 @@ fn ensure_registered_and_logged_in(
             try map.put("host", .{ .string = cfg.pantahub_host.? });
             try map.put("port", .{ .string = cfg.pantahub_port orelse "443" });
             try map.put("token", .{ .string = ph_client.token.? });
+            try map.put("use_https", .{ .bool = cfg.pantahub_use_https });
             try client.sendMessage(.logger, .subsystem_init, .{ .object = map });
         }
 

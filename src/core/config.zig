@@ -1,6 +1,7 @@
 const std = @import("std");
 const local_store = @import("local_store.zig");
 const automation = @import("automation.zig");
+const client_mod = @import("../net/client.zig");
 
 pub const Config = struct {
     allocator: std.mem.Allocator,
@@ -105,6 +106,7 @@ pub fn load(allocator: std.mem.Allocator, store: local_store.LocalStore, log: an
                 cfg.pantahub_host = try allocator.dupe(u8, trimmed_value["http://".len..]);
             } else {
                 cfg.pantahub_host = try allocator.dupe(u8, trimmed_value);
+                cfg.pantahub_use_https = !client_mod.Client.isLocalAddress(trimmed_value);
             }
         } else if (std.mem.eql(u8, key, "PH_CREDS_PORT")) {
             if (cfg.pantahub_port) |v| allocator.free(v);
