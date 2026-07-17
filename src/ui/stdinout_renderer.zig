@@ -117,10 +117,15 @@ pub const StdInOutRenderer = struct {
         }
         if (self.ipc_thread) |t| t.join();
         // Wait for detached stdin-input threads to observe quit_flag and exit
-        // before freeing self/ipc_client, otherwise they use-after-free.
-        while (self.input_threads.load(.acquire) > 0) {
+        // before freeing self/ipc_client, otherwise they use-after-free. The wait
+        // is bounded: a thread stuck in a blocking stdin read (possible when two
+        // input prompts overlap and one loses the poll race) must not hang
+        // shutdown forever — past the cap we accept the leak and move on.
+        var spins: usize = 0;
+        while (self.input_threads.load(.acquire) > 0 and spins < 500) : (spins += 1) {
             std.Thread.sleep(10 * std.time.ns_per_ms);
         }
+        if (self.input_threads.load(.acquire) > 0) return;
         if (self.ipc_client) |*c| c.deinit();
         self.allocator.destroy(self);
     }
@@ -198,7 +203,7 @@ pub const StdInOutRenderer = struct {
     }
 
     fn handleInvitationInput(self: *StdInOutRenderer) void {
-        defer _ = self.input_threads.fetchSub(1, .monotonic);
+        defer _ = self.input_threads.fetchSub(1, .release);
         const input = get_user_input(self, "Decision: ", null) catch return;
         defer self.allocator.free(input);
 
@@ -220,7 +225,7 @@ pub const StdInOutRenderer = struct {
     }
 
     fn handleUpdateInput(self: *StdInOutRenderer) void {
-        defer _ = self.input_threads.fetchSub(1, .monotonic);
+        defer _ = self.input_threads.fetchSub(1, .release);
         std.debug.print("UPDATE DECISION REQUIRED\n", .{});
         std.debug.print("An update cycle is in TESTING phase.\n", .{});
         std.debug.print("Select Outcome:\n", .{});

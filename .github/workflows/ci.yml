@@ -8,9 +8,17 @@ on:
   push:
   pull_request:
 
+# Supersede in-flight runs of the same ref instead of queueing duplicates.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    # Same-repo branches already get a run from the push event; only run the
+    # pull_request variant for forks, so PR commits aren't tested twice.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

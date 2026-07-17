@@ -138,7 +138,9 @@ pub const PvControlServer = struct {
     }
 
     fn handleConnectionWrapper(self: *PvControlServer, stream: std.net.Stream) void {
-        defer _ = self.active_connections.fetchSub(1, .monotonic);
+        // .release publishes this thread's stream/self accesses to whoever
+        // observes the drained counter with .acquire before tearing down.
+        defer _ = self.active_connections.fetchSub(1, .release);
         handleConnection(self, stream) catch |err| {
             std.log.err("PvControl connection handler error: {}", .{err});
         };
@@ -184,6 +186,26 @@ pub const PvControlServer = struct {
                     content_length = std.fmt.parseInt(usize, value, 10) catch null;
                     break;
                 }
+            }
+        }
+
+        // Reject oversized declared bodies before allocating: Content-Length is
+        // client-controlled, so an unchecked value is both a usize-overflow panic
+        // (headers_end + maxInt) and an unbounded single-request allocation.
+        const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
+        if (content_length) |cl| {
+            if (cl > MAX_BODY_SIZE) {
+                var resp = http_parser.HttpResponse{
+                    .status_code = 413,
+                    .status_text = "Payload Too Large",
+                    .content_type = "text/plain",
+                    .body = try self.allocator.dupe(u8, "Request body too large"),
+                };
+                defer resp.deinit(self.allocator);
+                const bytes = try resp.serialize(self.allocator);
+                defer self.allocator.free(bytes);
+                _ = try stream.write(bytes);
+                return;
             }
         }
 

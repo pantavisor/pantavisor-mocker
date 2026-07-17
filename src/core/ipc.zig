@@ -90,10 +90,15 @@ pub const IpcClient = struct {
             try self.read_buf.appendSlice(self.allocator, tmp[0..n]);
 
             // Bound a single message so a peer that never sends '\n' cannot grow
-            // the buffer without limit.
+            // the buffer without limit. Poison the connection too: callers all
+            // retry on non-ConnectionClosed errors, so merely returning an error
+            // while keeping the bytes (and the live socket) would re-enter here
+            // and grow the buffer forever — the exact loop this bound prevents.
             if (self.read_buf.items.len > 65536 and
                 std.mem.indexOfScalar(u8, self.read_buf.items, '\n') == null)
             {
+                self.read_buf.clearAndFree(self.allocator);
+                std.posix.shutdown(self.stream.handle, .both) catch {};
                 return error.MessageTooLong;
             }
         }
@@ -111,7 +116,9 @@ pub const IpcClient = struct {
             // buffered; otherwise a coalesced message would be starved by poll().
             if (timeout_ms) |t| {
                 if (!self.hasBufferedMessage()) {
-                    const elapsed = std.time.milliTimestamp() - start_time;
+                    // milliTimestamp is wall-clock: clamp so an NTP step backwards
+                    // can't make `elapsed` negative and panic the @intCast.
+                    const elapsed = @max(0, std.time.milliTimestamp() - start_time);
                     if (elapsed >= t) return error.Timeout;
 
                     const remaining = t - @as(u32, @intCast(elapsed));

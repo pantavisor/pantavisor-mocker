@@ -245,8 +245,9 @@ pub const Client = struct {
         // it were a valid response (which silently dropped pushed logs on a 401
         // and produced confusing JSON-shape errors elsewhere).
         if (status >= 400) {
-            const preview = if (resp.len > 512) resp[0..512] else resp;
-            self.log("HTTP {d} from {s} {s}: {s}", .{ status, method, url, preview });
+            // Log status and size only — error bodies can echo request contents
+            // (credentials included), and these logs are themselves uploaded.
+            self.log("HTTP {d} from {s} {s} ({d}-byte error body)", .{ status, method, url, resp.len });
             self.allocator.free(resp);
             return error.HttpRequestFailed;
         }

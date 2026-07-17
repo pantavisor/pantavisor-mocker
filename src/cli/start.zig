@@ -190,8 +190,11 @@ pub const StartCmd = struct {
         router_thread.join();
 
         bg_thread.join();
-        log_sub.deinit();
+        // Join the IPC run() thread BEFORE deinit: deinit frees the IPC read
+        // buffer and credential strings that run() may still be using.
+        log_sub.shutdown();
         log_thread.join();
+        log_sub.deinit();
     }
 };
 

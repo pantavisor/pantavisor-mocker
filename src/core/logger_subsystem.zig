@@ -19,9 +19,16 @@ pub const LoggerSubsystem = struct {
     port: ?[]const u8 = null,
     token: ?[]const u8 = null,
     use_https: bool = true,
-    // Guards host/port/token/use_https/client, which the IPC run() thread writes
-    // (on subsystem_init) and the uploadLoop thread reads concurrently.
+    // Guards host/port/token/use_https/creds_changed, which the IPC run() thread
+    // writes (on subsystem_init) and the uploadLoop thread reads concurrently.
+    // `client` is deliberately NOT covered: it is owned exclusively by uploadLoop
+    // (created, refreshed, and destroyed only there), because push_logs holds the
+    // client for minutes outside any lock — another thread freeing it (as the
+    // run() thread once did on re-init) is a use-after-free.
     creds_mutex: std.Thread.Mutex = .{},
+    // Set under creds_mutex whenever run() installs new credentials; uploadLoop
+    // consumes it and rebuilds its client with the fresh host/port/token.
+    creds_changed: bool = false,
 
     // Buffering
     log_buffer: std.ArrayList(u8),
@@ -45,6 +52,15 @@ pub const LoggerSubsystem = struct {
             .buffer_mutex = .{},
             .flush_thread = null,
         };
+    }
+
+    /// Unblocks the run() loop (blocked in receiveMessage) so its thread can be
+    /// joined. Callers must join the thread running run() between shutdown() and
+    /// deinit(): deinit frees the IPC read buffer and credential strings that
+    /// run() touches, so deinit-before-join is a use-after-free.
+    pub fn shutdown(self: *LoggerSubsystem) void {
+        self.quit_flag.store(true, .release);
+        std.posix.shutdown(self.ipc_client.stream.handle, .both) catch {};
     }
 
     pub fn deinit(self: *LoggerSubsystem) void {
@@ -93,26 +109,33 @@ pub const LoggerSubsystem = struct {
                         if (data == .object) {
                             self.creds_mutex.lock();
                             defer self.creds_mutex.unlock();
-                            if (self.client) |c| {
-                                c.deinit();
-                                self.allocator.destroy(c);
-                                self.client = null;
-                            }
+                            // Only update the credential strings here — never touch
+                            // self.client, which uploadLoop may be using in a
+                            // minutes-long push_logs outside any lock. Setting
+                            // creds_changed makes uploadLoop (the sole owner)
+                            // rebuild its client with these values.
                             if (data.object.get("host")) |h| {
-                                if (self.host) |old| self.allocator.free(old);
-                                self.host = try self.allocator.dupe(u8, h.string);
+                                if (h == .string) {
+                                    if (self.host) |old| self.allocator.free(old);
+                                    self.host = try self.allocator.dupe(u8, h.string);
+                                }
                             }
                             if (data.object.get("port")) |p| {
-                                if (self.port) |old| self.allocator.free(old);
-                                self.port = try self.allocator.dupe(u8, p.string);
+                                if (p == .string) {
+                                    if (self.port) |old| self.allocator.free(old);
+                                    self.port = try self.allocator.dupe(u8, p.string);
+                                }
                             }
                             if (data.object.get("token")) |t| {
-                                if (self.token) |old| self.allocator.free(old);
-                                self.token = try self.allocator.dupe(u8, t.string);
+                                if (t == .string) {
+                                    if (self.token) |old| self.allocator.free(old);
+                                    self.token = try self.allocator.dupe(u8, t.string);
+                                }
                             }
                             if (data.object.get("use_https")) |u| {
                                 if (u == .bool) self.use_https = u.bool;
                             }
+                            self.creds_changed = true;
                         }
                     }
                 },
@@ -214,38 +237,37 @@ pub const LoggerSubsystem = struct {
             if (self.quit_flag.load(.acquire)) break;
 
             // Build or refresh the client under the creds lock so the run() thread
-            // can't free host/port/token while we read them. The client keeps its
-            // own copies, so the slower push_logs call runs outside the lock.
+            // can't free host/port/token while we read them. This thread is the
+            // sole owner of self.client: run() only flips creds_changed, so the
+            // client can never be freed out from under the (minutes-long,
+            // lock-free) push_logs call below.
             self.creds_mutex.lock();
-            const have_creds = self.host != null and self.port != null and self.token != null;
-            if (have_creds) {
-                if (self.client == null) {
-                    if (self.allocator.create(client_mod.Client)) |c| {
-                        if (client_mod.Client.init(self.allocator, self.host.?, self.port.?, null)) |built| {
-                            c.* = built;
-                            c.use_https = self.use_https;
-                            c.token = self.allocator.dupe(u8, self.token.?) catch null;
-                            self.client = c;
-                        } else |_| {
-                            self.allocator.destroy(c);
-                        }
-                    } else |_| {}
-                } else if (self.token) |tok| {
-                    // Pick up a token rotated in via a later subsystem_init.
-                    const stale = self.client.?.token == null or !std.mem.eql(u8, self.client.?.token.?, tok);
-                    if (stale) {
-                        if (self.allocator.dupe(u8, tok)) |newtok| {
-                            if (self.client.?.token) |oldtok| self.allocator.free(oldtok);
-                            self.client.?.token = newtok;
-                        } else |_| {}
-                    }
+            if (self.creds_changed) {
+                self.creds_changed = false;
+                if (self.client) |c| {
+                    c.deinit();
+                    self.allocator.destroy(c);
+                    self.client = null;
                 }
             }
-            const client_ready = have_creds and self.client != null;
+            const have_creds = self.host != null and self.port != null and self.token != null;
+            if (have_creds and self.client == null) {
+                if (self.allocator.create(client_mod.Client)) |c| {
+                    if (client_mod.Client.init(self.allocator, self.host.?, self.port.?, null)) |built| {
+                        c.* = built;
+                        c.use_https = self.use_https;
+                        c.token = self.allocator.dupe(u8, self.token.?) catch null;
+                        self.client = c;
+                    } else |_| {
+                        self.allocator.destroy(c);
+                    }
+                } else |_| {}
+            }
+            const client = self.client;
             self.creds_mutex.unlock();
 
-            if (client_ready) {
-                log_pusher.push_logs(self.allocator, self.client.?, &self.store, self) catch |err| {
+            if (client) |c| {
+                log_pusher.push_logs(self.allocator, c, &self.store, self) catch |err| {
                     self.log("push_logs error: {any}", .{err});
                 };
             }

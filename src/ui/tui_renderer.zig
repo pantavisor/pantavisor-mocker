@@ -23,11 +23,14 @@ pub const TuiRenderer = struct {
 
     pub fn init(allocator: std.mem.Allocator, quit_flag: *std.atomic.Value(bool)) !*TuiRenderer {
         const self = try allocator.create(TuiRenderer);
+        errdefer allocator.destroy(self);
 
         // `self` is already allocated, so &self.tty_buffer is a stable address; the
         // struct-literal assignment below only clobbers the (unused-at-init) buffer
         // contents, not the pointer vaxis stored.
-        const tty = try vaxis.Tty.init(&self.tty_buffer);
+        var tty = try vaxis.Tty.init(&self.tty_buffer);
+        // Without this, a failure below leaves the user's terminal in raw mode.
+        errdefer tty.deinit();
         const vx = try vaxis.init(allocator, .{});
 
         self.* = .{
@@ -45,8 +48,17 @@ pub const TuiRenderer = struct {
             .render_mutex = .{},
         };
 
+        errdefer {
+            self.state.deinit();
+            self.arena.deinit();
+            self.vx.deinit(allocator, self.tty.writer());
+        }
+
         try self.loop.init();
         try self.loop.start();
+        // The loop's reader thread touches self.tty — stop it before the tty
+        // errdefer tears the terminal down.
+        errdefer self.loop.stop();
 
         try self.vx.enterAltScreen(self.tty.writer());
         try self.vx.queryTerminal(self.tty.writer(), 1 * std.time.ns_per_s);

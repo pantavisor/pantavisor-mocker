@@ -81,3 +81,57 @@ test "pvcontrol_server: integration test" {
     std.Thread.sleep(100 * std.time.ns_per_ms);
     try std.testing.expect(quit_flag.load(.acquire) == true);
 }
+
+test "pvcontrol_server: huge Content-Length is rejected, not allocated" {
+    const allocator = std.testing.allocator;
+    const tmp_dir_path = "tmp_pvcontrol_test_cl";
+    std.fs.cwd().makePath(tmp_dir_path) catch {};
+    defer std.fs.cwd().deleteTree(tmp_dir_path) catch {};
+
+    var quit_flag = std.atomic.Value(bool).init(false);
+
+    var store = try local_store.LocalStore.init(allocator, tmp_dir_path, null, false);
+    defer store.deinit();
+    try store.init_revision_dirs("0");
+    try store.save_revision_state("0", "{\"config\":{\"components\":{}}}");
+
+    const log_path = try std.fs.path.join(allocator, &[_][]const u8{ tmp_dir_path, "test.log" });
+    defer allocator.free(log_path);
+    var log = try logger.Logger.init(log_path, true);
+    defer log.deinit();
+
+    var server = try pvcontrol_server.PvControlServer.init(allocator, tmp_dir_path, &quit_flag, true, &log);
+    defer server.deinit();
+    try server.start();
+    std.Thread.sleep(100 * std.time.ns_per_ms);
+
+    var buf: [4096]u8 = undefined;
+
+    // maxInt(usize): pre-fix this overflows `headers_end + cl` and panics the
+    // handler thread (aborting the whole process in Debug/ReleaseSafe).
+    {
+        const stream = try std.net.connectUnixSocket(server.socket_path);
+        defer stream.close();
+        try stream.writeAll("POST /commands HTTP/1.1\r\nContent-Length: 18446744073709551615\r\n\r\n");
+        const n = try stream.read(&buf);
+        try std.testing.expect(std.mem.containsAtLeast(u8, buf[0..n], 1, "413"));
+    }
+
+    // Large but non-overflowing: pre-fix this is a multi-GB allocation.
+    {
+        const stream = try std.net.connectUnixSocket(server.socket_path);
+        defer stream.close();
+        try stream.writeAll("POST /commands HTTP/1.1\r\nContent-Length: 4294967296\r\n\r\n");
+        const n = try stream.read(&buf);
+        try std.testing.expect(std.mem.containsAtLeast(u8, buf[0..n], 1, "413"));
+    }
+
+    // Sanity: a normal-sized body still works after the cap.
+    {
+        const stream = try std.net.connectUnixSocket(server.socket_path);
+        defer stream.close();
+        try stream.writeAll("POST /commands HTTP/1.1\r\nContent-Length: 13\r\n\r\nREBOOT_DEVICE");
+        const n = try stream.read(&buf);
+        try std.testing.expect(std.mem.containsAtLeast(u8, buf[0..n], 1, "HTTP/1.1 200 OK"));
+    }
+}

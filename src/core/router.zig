@@ -16,6 +16,13 @@ pub const Router = struct {
     socket_path: []const u8,
     subsystems: std.AutoHashMap(SubsystemId, std.net.Stream),
     subsystem_status: std.AutoHashMap(SubsystemId, SubsystemStatus),
+    // Streams replaced by a reconnect. Their old handler thread may still be
+    // blocked reading them, so they are only shutdown() when retired and not
+    // close()d until deinit, after the handler drain (closing a live fd would
+    // let the number be recycled by a concurrent accept and leave the old
+    // handler reading another connection's traffic — or busy-looping on EBADF,
+    // which its read loop treats as a transient error).
+    retired_streams: std.ArrayList(std.net.Stream),
     subsystems_mutex: std.Thread.Mutex,
     quit_flag: *std.atomic.Value(bool),
     active_connections: std.atomic.Value(usize),
@@ -28,6 +35,7 @@ pub const Router = struct {
             .socket_path = try allocator.dupe(u8, socket_path),
             .subsystems = std.AutoHashMap(SubsystemId, std.net.Stream).init(allocator),
             .subsystem_status = std.AutoHashMap(SubsystemId, SubsystemStatus).init(allocator),
+            .retired_streams = std.ArrayList(std.net.Stream){},
             .subsystems_mutex = .{},
             .quit_flag = quit_flag,
             .active_connections = std.atomic.Value(usize).init(0),
@@ -61,6 +69,10 @@ pub const Router = struct {
         while (it.next()) |stream| {
             stream.close();
         }
+        for (self.retired_streams.items) |stream| {
+            stream.close();
+        }
+        self.retired_streams.deinit(self.allocator);
         self.subsystems.deinit();
         self.subsystem_status.deinit();
         std.fs.cwd().deleteFile(self.socket_path) catch {};
@@ -116,7 +128,9 @@ pub const Router = struct {
     }
 
     fn handleConnection(self: *Router, stream: std.net.Stream) !void {
-        defer _ = self.active_connections.fetchSub(1, .monotonic);
+        // .release publishes this thread's stream accesses to deinit's .acquire
+        // drain loop, so the streams are only closed after handlers truly exited.
+        defer _ = self.active_connections.fetchSub(1, .release);
         var buf: [1024]u8 = undefined;
         var r = stream.reader(&buf);
         const reader = r.interface().adaptToOldInterface();
@@ -135,11 +149,15 @@ pub const Router = struct {
             if (msg.type == .subsystem_init and msg.to == .core) {
                 self.subsystems_mutex.lock();
                 defer self.subsystems_mutex.unlock();
-                // Close any previous connection for this subsystem before replacing
-                // it, otherwise a reconnecting subsystem leaks the old socket fd
-                // (it would only be closed at router shutdown).
+                // Retire any previous connection for this subsystem before
+                // replacing it: shutdown() unblocks its handler thread (which
+                // exits on EndOfStream), but the fd itself is only closed at
+                // deinit, after the drain — see retired_streams.
                 if (self.subsystems.get(msg.from)) |old_stream| {
-                    if (old_stream.handle != stream.handle) old_stream.close();
+                    if (old_stream.handle != stream.handle) {
+                        std.posix.shutdown(old_stream.handle, .both) catch {};
+                        self.retired_streams.append(self.allocator, old_stream) catch {};
+                    }
                 }
                 try self.subsystems.put(msg.from, stream);
                 try self.subsystem_status.put(msg.from, .registered);
