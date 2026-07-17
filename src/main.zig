@@ -22,6 +22,8 @@ pub const invitation = @import("flows/invitation.zig");
 pub const tui = @import("ui/tui.zig");
 pub const business_logic = @import("core/business_logic.zig");
 pub const validation = @import("core/validation.zig");
+pub const ipc = @import("core/ipc.zig");
+pub const messages = @import("core/messages.zig");
 
 test {
     _ = @import("cli/app.zig");

@@ -49,7 +49,8 @@ pub fn calculateProgressPercentage(
 ) u32 {
     _ = step;
     if (total_steps == 0) return 0;
-    const progress = (current_step * 100) / total_steps;
+    // Widen to u64 for the multiply: current_step * 100 overflows u32 past ~42.9M.
+    const progress = (@as(u64, current_step) * 100) / total_steps;
     return if (progress > 100) 100 else @as(u32, @intCast(progress));
 }
 

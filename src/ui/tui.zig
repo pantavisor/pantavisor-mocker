@@ -127,9 +127,17 @@ pub const AppState = struct {
                 .timestamp = std.time.timestamp(),
             });
 
-            if (self.logs.items.len > 500) {
-                const removed = self.logs.orderedRemove(0);
-                self.allocator.free(removed.message);
+            // Trim in batches: orderedRemove(0) is an O(n) memmove, so removing one
+            // element per appended line makes every log line O(n). Let the list grow
+            // a little past the cap, then drop the oldest slice in a single shift.
+            const max_logs = 500;
+            const trim_threshold = 600;
+            if (self.logs.items.len >= trim_threshold) {
+                const remove_count = self.logs.items.len - max_logs;
+                for (self.logs.items[0..remove_count]) |old| self.allocator.free(old.message);
+                const survivors = self.logs.items.len - remove_count;
+                std.mem.copyForwards(LogMessage, self.logs.items[0..survivors], self.logs.items[remove_count..]);
+                self.logs.shrinkRetainingCapacity(survivors);
             }
         }
     }

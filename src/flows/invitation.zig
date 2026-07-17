@@ -48,6 +48,10 @@ pub fn detect_invitation(
     };
     defer um_parsed.deinit();
 
+    // The API may return a non-object body (e.g. null or an error array); guard
+    // the tag before accessing .object, which would otherwise panic.
+    if (um_parsed.value != .object) return null;
+
     var invite: ?InviteToken = null;
     if (um_parsed.value.object.get("fleet.update-proto.token")) |token_val| {
         if (token_val == .string) {
@@ -75,30 +79,36 @@ pub fn detect_invitation(
 
     var answered = false;
     if (std.fs.cwd().openFile(dm_path, .{})) |file| {
-        const content = try file.readToEndAlloc(allocator, 1024 * 100);
-        defer allocator.free(content);
-        file.close();
-
-        if (std.json.parseFromSlice(std.json.Value, allocator, content, .{ .duplicate_field_behavior = .use_last })) |dm_parsed| {
-            defer dm_parsed.deinit();
-            if (dm_parsed.value.object.get("fleet.update-proto.token")) |ans_val| {
-                if (ans_val == .object) {
-                    if (ans_val.object.get("deployment")) |dep_val| {
-                        if (dep_val == .string and std.mem.eql(u8, dep_val.string, inv.deployment)) {
-                            answered = true;
+        // defer the close and tolerate a read error (e.g. meta.json over the
+        // 100 KB cap) instead of leaking the fd and the cloned invite via `try`.
+        defer file.close();
+        if (file.readToEndAlloc(allocator, 1024 * 100)) |content| {
+            defer allocator.free(content);
+            if (std.json.parseFromSlice(std.json.Value, allocator, content, .{ .duplicate_field_behavior = .use_last })) |dm_parsed| {
+                defer dm_parsed.deinit();
+                if (dm_parsed.value == .object) {
+                    if (dm_parsed.value.object.get("fleet.update-proto.token")) |ans_val| {
+                        if (ans_val == .object) {
+                            if (ans_val.object.get("deployment")) |dep_val| {
+                                if (dep_val == .string and std.mem.eql(u8, dep_val.string, inv.deployment)) {
+                                    answered = true;
+                                }
+                            }
+                        } else if (ans_val == .string) {
+                            if (std.json.parseFromSlice(std.json.Value, allocator, ans_val.string, .{})) |ans_inner| {
+                                defer ans_inner.deinit();
+                                if (ans_inner.value == .object) {
+                                    if (ans_inner.value.object.get("deployment")) |dep_val| {
+                                        if (dep_val == .string and std.mem.eql(u8, dep_val.string, inv.deployment)) {
+                                            answered = true;
+                                        }
+                                    }
+                                }
+                            } else |_| {}
                         }
                     }
-                } else if (ans_val == .string) {
-                    if (std.json.parseFromSlice(std.json.Value, allocator, ans_val.string, .{})) |ans_inner| {
-                        defer ans_inner.deinit();
-                        if (ans_inner.value.object.get("deployment")) |dep_val| {
-                            if (dep_val == .string and std.mem.eql(u8, dep_val.string, inv.deployment)) {
-                                answered = true;
-                            }
-                        }
-                    } else |_| {}
                 }
-            }
+            } else |_| {}
         } else |_| {}
     } else |_| {}
 

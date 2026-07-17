@@ -298,8 +298,22 @@ fn process_step(
             };
 
             log.log("Downloading object '{s}' from {s}", .{ obj.objectname, download_url });
-            const content = try @import("../net/curl.zig").Curl.simple_request(download_url, "GET", null, null, allocator);
+            var dl_status: c_long = 0;
+            const content = try @import("../net/curl.zig").Curl.simple_request(download_url, "GET", null, null, allocator, &dl_status);
             defer allocator.free(content);
+
+            // A 403/404 from the signed URL returns an HTML/JSON error page as the
+            // body; without this check it would be written to dest_path and — when
+            // obj.id isn't a well-formed sha256 — silently accepted as the object.
+            if (dl_status >= 400) {
+                const err_msg = try std.fmt.allocPrint(allocator, "Object download failed: HTTP {d} for '{s}'", .{ dl_status, obj.objectname });
+                defer allocator.free(err_msg);
+
+                const fail_prog = client_mod.StepProgress{ .status = client_mod.UpdateStatus.ERROR.toString(), .progress = 0, .@"status-msg" = err_msg };
+                try write_progress_and_log(allocator, store, log, rev_str, fail_prog);
+                try client.post_progress(prn, step.rev, fail_prog);
+                return false;
+            }
 
             const file = try std.fs.cwd().createFile(dest_path, .{});
             defer file.close();
@@ -376,7 +390,7 @@ fn process_step(
 
     if (success) {
         if (step.state) |st| {
-            const state_json = try std.fmt.allocPrint(allocator, "{any}", .{std.json.fmt(st, .{})});
+            const state_json = try std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(st, .{})});
             defer allocator.free(state_json);
             try store.save_revision_state(rev_str, state_json);
         }

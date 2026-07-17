@@ -605,11 +605,14 @@ fn check_and_process_claim(
         if (device_info_res) |res| {
             defer allocator.free(res);
             var parsed = std.json.parseFromSlice(std.json.Value, allocator, res, .{ .duplicate_field_behavior = .use_last }) catch |err| {
+                // A transient non-JSON response (e.g. a 503 HTML page) must not
+                // abort the whole event loop; skip this cycle and retry the next.
                 log.log("Failed to parse device info: {any}", .{err});
-                return err;
+                return;
             };
             defer parsed.deinit();
 
+            if (parsed.value != .object) return;
             if (parsed.value.object.get("owner")) |owner_val| {
                 if (owner_val == .string and owner_val.string.len > 0) {
                     log.log("Device CLAIMED by {s}! Initializing cloud state...", .{owner_val.string});

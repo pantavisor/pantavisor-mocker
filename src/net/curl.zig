@@ -18,7 +18,7 @@ extern "c" fn curl_shim_setopt_long(handle: *c.CURL, option: c.CURLoption, value
 extern "c" fn curl_shim_getinfo_long(handle: *c.CURL, info: c.CURLINFO, value: *c_long) c.CURLcode;
 extern "c" fn curl_shim_slist_append(list: ?*c.curl_slist, string: [*:0]const u8) ?*c.curl_slist;
 extern "c" fn curl_shim_slist_free_all(list: ?*c.curl_slist) void;
-extern "c" fn curl_shim_simple_request(url: [*:0]const u8, method: [*:0]const u8, payload: ?[*:0]const u8, headers: ?*c.curl_slist, response: *?[*]u8, response_len: *usize) c.CURLcode;
+extern "c" fn curl_shim_simple_request(url: [*:0]const u8, method: [*:0]const u8, payload: ?[*:0]const u8, headers: ?*c.curl_slist, response: *?[*]u8, response_len: *usize, status_code: *c_long) c.CURLcode;
 extern "c" fn curl_shim_strerror(errornum: c.CURLcode) [*:0]const u8;
 
 pub const Curl = struct {
@@ -81,7 +81,7 @@ pub const Curl = struct {
         if (res != c.CURLE_OK) return error.CurlGetInfoFailed;
     }
 
-    pub fn simple_request(url: []const u8, method: []const u8, payload: ?[]const u8, headers: ?*c.curl_slist, allocator: std.mem.Allocator) ![]u8 {
+    pub fn simple_request(url: []const u8, method: []const u8, payload: ?[]const u8, headers: ?*c.curl_slist, allocator: std.mem.Allocator, status_out: ?*c_long) ![]u8 {
         const url_z = try allocator.dupeZ(u8, url);
         defer allocator.free(url_z);
         const method_z = try allocator.dupeZ(u8, method);
@@ -91,13 +91,15 @@ pub const Curl = struct {
 
         var response_ptr: ?[*]u8 = null;
         var response_len: usize = 0;
+        var status_code: c_long = 0;
 
-        const res = curl_shim_simple_request(url_z, method_z, if (payload_z) |p| p else null, headers, &response_ptr, &response_len);
+        const res = curl_shim_simple_request(url_z, method_z, if (payload_z) |p| p else null, headers, &response_ptr, &response_len, &status_code);
         if (res != c.CURLE_OK) {
             const err_msg = std.mem.span(curl_shim_strerror(res));
             log.err("curl request to {s} failed: {s}", .{ url, err_msg });
             return error.CurlPerformFailed;
         }
+        if (status_out) |s| s.* = status_code;
 
         if (response_ptr) |ptr| {
             const owned = try allocator.dupe(u8, ptr[0..response_len]);
