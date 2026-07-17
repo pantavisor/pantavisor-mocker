@@ -192,9 +192,15 @@ pub const PvControlServer = struct {
         // Reject oversized declared bodies before allocating: Content-Length is
         // client-controlled, so an unchecked value is both a usize-overflow panic
         // (headers_end + maxInt) and an unbounded single-request allocation.
+        // Object uploads (PUT /objects/<sha>) legitimately carry container images
+        // of hundreds of MB, so they get a much larger bound than the control
+        // endpoints, whose bodies are all small JSON/commands.
         const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
+        const MAX_OBJECT_SIZE: usize = 2 * 1024 * 1024 * 1024;
+        const is_object_put = std.mem.startsWith(u8, headers_data, "PUT /objects/");
+        const body_limit = if (is_object_put) MAX_OBJECT_SIZE else MAX_BODY_SIZE;
         if (content_length) |cl| {
-            if (cl > MAX_BODY_SIZE) {
+            if (cl > body_limit) {
                 var resp = http_parser.HttpResponse{
                     .status_code = 413,
                     .status_text = "Payload Too Large",
@@ -713,8 +719,11 @@ pub const PvControlServer = struct {
                 // Get object
                 const path = try std.fs.path.join(self.allocator, &[_][]const u8{ objects_dir, sha });
                 defer self.allocator.free(path);
-                const content = try std.fs.cwd().readFileAlloc(self.allocator, path, 100 * 1024 * 1024);
-                // Note: potential memory issue for huge objects, but mocker should be fine.
+                // Match the PUT-side object bound: objects can be container images
+                // of hundreds of MB, and the old 100MB limit made GET fail on
+                // objects the server itself had accepted. Whole-object buffering
+                // is a known cost of this server's design.
+                const content = try std.fs.cwd().readFileAlloc(self.allocator, path, 2 * 1024 * 1024 * 1024);
                 return http_parser.HttpResponse{
                     .status_code = 200,
                     .status_text = "OK",

@@ -126,6 +126,31 @@ test "pvcontrol_server: huge Content-Length is rejected, not allocated" {
         try std.testing.expect(std.mem.containsAtLeast(u8, buf[0..n], 1, "413"));
     }
 
+    // Object uploads legitimately carry huge bodies (container images): a 200MB
+    // declared PUT /objects must NOT be rejected. The server allocates and waits
+    // for the body; shutting down our write side makes it read EOF and drop the
+    // connection without a response — so EOF here proves "accepted", while a 413
+    // would arrive as readable bytes.
+    {
+        const stream = try std.net.connectUnixSocket(server.socket_path);
+        defer stream.close();
+        const sha = "a" ** 64;
+        try stream.writeAll("PUT /objects/" ++ sha ++ " HTTP/1.1\r\nContent-Length: 209715200\r\n\r\n");
+        std.posix.shutdown(stream.handle, .send) catch {};
+        const n = try stream.read(&buf);
+        try std.testing.expectEqual(@as(usize, 0), n);
+    }
+
+    // ...but even object uploads have a ceiling.
+    {
+        const stream = try std.net.connectUnixSocket(server.socket_path);
+        defer stream.close();
+        const sha = "a" ** 64;
+        try stream.writeAll("PUT /objects/" ++ sha ++ " HTTP/1.1\r\nContent-Length: 2147483649\r\n\r\n");
+        const n = try stream.read(&buf);
+        try std.testing.expect(std.mem.containsAtLeast(u8, buf[0..n], 1, "413"));
+    }
+
     // Sanity: a normal-sized body still works after the cap.
     {
         const stream = try std.net.connectUnixSocket(server.socket_path);
