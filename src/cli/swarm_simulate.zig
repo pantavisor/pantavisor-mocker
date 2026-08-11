@@ -170,12 +170,14 @@ fn killAllSessions(allocator: std.mem.Allocator) void {
 pub const SwarmSimulateCmd = struct {
     dir: []const u8 = ".",
     auto: bool = false,
+    headless: bool = false,
 
     pub const meta = .{
         .description = "Launch tmux-based simulation for all generated mockers.",
         .args = .{
             .dir = .{ .short = 'd', .help = "Workspace directory." },
             .auto = .{ .short = 'a', .help = "Enable automation mode for all simulated devices (auto-respond based on mocker.json config)." },
+            .headless = .{ .help = "Run without the interactive menu (for containers/Kubernetes); stops on SIGTERM/SIGINT or when all sessions end." },
         },
     };
 
@@ -341,6 +343,12 @@ pub const SwarmSimulateCmd = struct {
             if (self.auto) " in AUTOMATION mode" else "",
         });
 
+        if (self.headless) {
+            runHeadless(allocator, &sim_log, sessions.items, &previous_status, signal_fd);
+            killAllSessions(allocator);
+            return;
+        }
+
         const stdin_file = std.fs.File.stdin();
 
         while (true) {
@@ -351,15 +359,7 @@ pub const SwarmSimulateCmd = struct {
             std.debug.print("----|------------------------------------|---------------------------------\n", .{});
 
             for (sessions.items, 0..) |session, idx| {
-                const is_running = blk: {
-                    const check = std.process.Child.run(.{
-                        .allocator = allocator,
-                        .argv = &.{ "tmux", "has-session", "-t", session.name },
-                    }) catch break :blk false;
-                    allocator.free(check.stdout);
-                    allocator.free(check.stderr);
-                    break :blk (check.term.Exited == 0);
-                };
+                const is_running = sessionRunning(allocator, session.name);
 
                 const status = if (is_running) "RUNNING" else "STOPPED";
 
@@ -434,6 +434,72 @@ pub const SwarmSimulateCmd = struct {
         }
 
         killAllSessions(allocator);
+    }
+
+    fn sessionRunning(allocator: std.mem.Allocator, session_name: []const u8) bool {
+        const check = std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &.{ "tmux", "has-session", "-t", session_name },
+        }) catch return false;
+        allocator.free(check.stdout);
+        allocator.free(check.stderr);
+        return check.term.Exited == 0;
+    }
+
+    /// Non-interactive monitor loop for containers/Kubernetes: no stdin menu.
+    /// Polls session status, logs stops, and returns on SIGTERM/SIGINT or when
+    /// every session has ended. The caller kills any remaining sessions.
+    fn runHeadless(
+        allocator: std.mem.Allocator,
+        sim_log: *SimulationLog,
+        sessions: []const Session,
+        previous_status: *std.StringHashMap(bool),
+        signal_fd: c_int,
+    ) void {
+        std.debug.assert(sessions.len > 0);
+        std.debug.print("Headless mode: monitoring {d} session(s). Send SIGTERM/SIGINT to stop.\n", .{sessions.len});
+        sim_log.logInfo("Headless mode: monitoring sessions");
+
+        while (true) {
+            var fds = [1]std.posix.pollfd{.{
+                .fd = signal_fd,
+                .events = std.posix.POLL.IN,
+                .revents = 0,
+            }};
+            const ready = std.posix.poll(&fds, 5000) catch 0;
+            if (ready > 0 and (fds[0].revents & std.posix.POLL.IN) != 0) {
+                std.log.info("Signal received, cleaning up...", .{});
+                sim_log.logInfo("Signal received - stopping all sessions");
+                return;
+            }
+
+            var running_count: usize = 0;
+            for (sessions) |session| {
+                const is_running = sessionRunning(allocator, session.name);
+                if (is_running) running_count += 1;
+
+                if (previous_status.get(session.name)) |was_running| {
+                    if (was_running and !is_running) {
+                        const reason = sim_log.captureSessionOutput(session.name);
+                        defer if (!std.mem.eql(u8, reason, "unable to capture output") and
+                            !std.mem.eql(u8, reason, "session ended (no output captured)") and
+                            !std.mem.eql(u8, reason, "memory allocation failed"))
+                        {
+                            allocator.free(@constCast(reason));
+                        };
+                        sim_log.logStop(session.name, session.path, reason);
+                        std.debug.print("Session stopped: {s} ({s})\n", .{ session.name, reason });
+                    }
+                }
+                previous_status.put(session.name, is_running) catch {};
+            }
+
+            if (running_count == 0) {
+                std.debug.print("All sessions stopped. Exiting.\n", .{});
+                sim_log.logInfo("All sessions stopped - exiting headless monitor");
+                return;
+            }
+        }
     }
 
     fn readLine(file: std.fs.File, signal_fd: c_int, buf: []u8) !?[]const u8 {

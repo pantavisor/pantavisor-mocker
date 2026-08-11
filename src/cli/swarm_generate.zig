@@ -2,32 +2,49 @@ const std = @import("std");
 const local_store = @import("../core/local_store.zig");
 const swarm_workspace = @import("swarm_workspace.zig");
 
+const DEFAULT_HOST = "api.pantahub.com";
+const DEFAULT_PORT = "443";
+
+fn resolveHost(cli_host: ?[]const u8, ws: *const swarm_workspace.SwarmWorkspace) []const u8 {
+    return cli_host orelse (ws.host orelse DEFAULT_HOST);
+}
+
+fn resolvePort(cli_port: ?[]const u8, ws: *const swarm_workspace.SwarmWorkspace) []const u8 {
+    return cli_port orelse (ws.port orelse DEFAULT_PORT);
+}
+
 pub const GenerateDevicesCmd = struct {
     count: u32 = 0,
     dir: []const u8 = "devices",
     workspace: []const u8 = ".",
-    host: []const u8 = "api.pantahub.com",
-    port: []const u8 = "443",
+    config: ?[]const u8 = null,
+    host: ?[]const u8 = null,
+    port: ?[]const u8 = null,
 
     pub const meta = .{
         .description = "Generate generic simulated devices.",
         .args = .{
-            .count = .{ .short = 'n', .help = "Number of devices to generate." },
+            .count = .{ .short = 'n', .help = "Number of devices to generate (default: generate.devices from swarm.json)." },
             .dir = .{ .short = 'd', .help = "Output directory." },
-            .workspace = .{ .short = 'w', .help = "Workspace directory (contains config files)." },
-            .host = .{ .help = "Pantahub API host." },
-            .port = .{ .help = "Pantahub API port." },
+            .workspace = .{ .short = 'w', .help = "Workspace directory (contains swarm.json or legacy config files)." },
+            .config = .{ .short = 'c', .help = "Config file to use instead of swarm.json (relative to workspace, or absolute)." },
+            .host = .{ .help = "Pantahub API host (default: pantahub.host from swarm.json)." },
+            .port = .{ .help = "Pantahub API port (default: pantahub.port from swarm.json)." },
         },
     };
 
     pub fn run(self: @This(), allocator: std.mem.Allocator) !void {
-        if (self.count == 0) {
-            std.debug.print("Error: --count is required and must be a positive integer.\n", .{});
+        var ws = try swarm_workspace.SwarmWorkspace.initWithConfig(allocator, self.workspace, self.config);
+        defer ws.deinit();
+
+        const count = if (self.count > 0) self.count else ws.generate.devices;
+        if (count == 0) {
+            std.debug.print("Error: --count is required (or set generate.devices in swarm.json).\n", .{});
             return error.MissingArgument;
         }
 
-        var ws = try swarm_workspace.SwarmWorkspace.init(allocator, self.workspace);
-        defer ws.deinit();
+        const host = resolveHost(self.host, &ws);
+        const port = resolvePort(self.port, &ws);
 
         // Read models
         var models = try ws.readModels();
@@ -37,16 +54,16 @@ pub const GenerateDevicesCmd = struct {
         }
 
         if (models.items.len == 0) {
-            std.debug.print("Error: models.txt is empty.\n", .{});
+            std.debug.print("Error: no models configured (add 'models' to swarm.json or create models.txt).\n", .{});
             return error.InvalidArgument;
         }
 
-        std.debug.print("Generating {d} devices...\n", .{self.count});
+        std.debug.print("Generating {d} devices (host: {s}:{s})...\n", .{ count, host, port });
 
-        for (0..self.count) |i| {
+        for (0..count) |i| {
             const device_id = swarm_workspace.generateHexId();
             const model = models.items[i % models.items.len];
-            std.debug.print("  Creating Device [{d}/{d}]: {s}\n", .{ i + 1, self.count, &device_id });
+            std.debug.print("  Creating Device [{d}/{d}]: {s}\n", .{ i + 1, count, &device_id });
 
             // Build path: {dir}/{id}/mocker
             var path_buf: [4096]u8 = undefined;
@@ -57,8 +74,8 @@ pub const GenerateDevicesCmd = struct {
             defer store.deinit();
 
             // Set host/port
-            try store.save_config_value("PH_CREDS_HOST", self.host);
-            try store.save_config_value("PH_CREDS_PORT", self.port);
+            try store.save_config_value("PH_CREDS_HOST", host);
+            try store.save_config_value("PH_CREDS_PORT", port);
             try store.save_config_value("PH_FACTORY_AUTOTOK", ws.autojoin_token);
 
             // Build merged device-meta JSON
@@ -76,10 +93,10 @@ pub const GenerateDevicesCmd = struct {
             );
             defer allocator.free(device_meta);
 
-            // Write mocker.json with device-meta
+            // Write mocker.json with device-meta and automation config
             var mocker_path_buf: [4096]u8 = undefined;
             const mocker_path = try std.fmt.bufPrint(&mocker_path_buf, "{s}/config/mocker.json", .{storage_path});
-            try swarm_workspace.writeMockerJson(allocator, mocker_path, device_meta);
+            try swarm_workspace.writeMockerJson(allocator, mocker_path, device_meta, ws.automation_json);
         }
 
         std.debug.print("Done generating devices.\n", .{});
@@ -90,35 +107,41 @@ pub const GenerateAppliancesCmd = struct {
     count: u32 = 0,
     dir: []const u8 = "appliances",
     workspace: []const u8 = ".",
-    host: []const u8 = "api.pantahub.com",
-    port: []const u8 = "443",
+    config: ?[]const u8 = null,
+    host: ?[]const u8 = null,
+    port: ?[]const u8 = null,
 
     pub const meta = .{
         .description = "Generate appliances per channel with multiple models.",
         .args = .{
-            .count = .{ .short = 'n', .help = "Number of appliances per channel." },
+            .count = .{ .short = 'n', .help = "Number of appliances per channel (default: generate.appliances from swarm.json)." },
             .dir = .{ .short = 'd', .help = "Output directory." },
-            .workspace = .{ .short = 'w', .help = "Workspace directory (contains config files)." },
-            .host = .{ .help = "Pantahub API host." },
-            .port = .{ .help = "Pantahub API port." },
+            .workspace = .{ .short = 'w', .help = "Workspace directory (contains swarm.json or legacy config files)." },
+            .config = .{ .short = 'c', .help = "Config file to use instead of swarm.json (relative to workspace, or absolute)." },
+            .host = .{ .help = "Pantahub API host (default: pantahub.host from swarm.json)." },
+            .port = .{ .help = "Pantahub API port (default: pantahub.port from swarm.json)." },
         },
     };
 
     pub fn run(self: @This(), allocator: std.mem.Allocator) !void {
-        if (self.count == 0) {
-            std.debug.print("Error: --count is required and must be a positive integer.\n", .{});
+        var ws = try swarm_workspace.SwarmWorkspace.initWithConfig(allocator, self.workspace, self.config);
+        defer ws.deinit();
+
+        const count = if (self.count > 0) self.count else ws.generate.appliances;
+        if (count == 0) {
+            std.debug.print("Error: --count is required (or set generate.appliances in swarm.json).\n", .{});
             return error.MissingArgument;
         }
 
-        var ws = try swarm_workspace.SwarmWorkspace.init(allocator, self.workspace);
-        defer ws.deinit();
+        const host = resolveHost(self.host, &ws);
+        const port = resolvePort(self.port, &ws);
 
-        // Read channels.json
+        // Read channels
         var channels_parsed = try ws.readChannelsJson();
         defer channels_parsed.deinit();
 
         if (channels_parsed.value != .object) {
-            std.debug.print("Error: channels.json must be a JSON object.\n", .{});
+            std.debug.print("Error: 'channels' must be a JSON object.\n", .{});
             return error.InvalidArgument;
         }
 
@@ -130,9 +153,11 @@ pub const GenerateAppliancesCmd = struct {
         }
 
         if (models.items.len == 0) {
-            std.debug.print("Error: models.txt is empty.\n", .{});
+            std.debug.print("Error: no models configured (add 'models' to swarm.json or create models.txt).\n", .{});
             return error.InvalidArgument;
         }
+
+        std.debug.print("Generating {d} appliances per channel (host: {s}:{s})...\n", .{ count, host, port });
 
         // Iterate channels
         var channel_it = channels_parsed.value.object.iterator();
@@ -149,9 +174,9 @@ pub const GenerateAppliancesCmd = struct {
             else
                 null;
 
-            for (0..self.count) |i| {
+            for (0..count) |i| {
                 const appliance_id = swarm_workspace.generateHexId();
-                std.debug.print("  Creating Appliance [{d}/{d}]: {s}\n", .{ i + 1, self.count, &appliance_id });
+                std.debug.print("  Creating Appliance [{d}/{d}]: {s}\n", .{ i + 1, count, &appliance_id });
 
                 for (models.items) |model| {
                     // Sanitize model name
@@ -172,8 +197,8 @@ pub const GenerateAppliancesCmd = struct {
                     defer store.deinit();
 
                     // Set host/port/token
-                    try store.save_config_value("PH_CREDS_HOST", self.host);
-                    try store.save_config_value("PH_CREDS_PORT", self.port);
+                    try store.save_config_value("PH_CREDS_HOST", host);
+                    try store.save_config_value("PH_CREDS_PORT", port);
                     try store.save_config_value("PH_FACTORY_AUTOTOK", ws.autojoin_token);
 
                     // Build merged device-meta JSON
@@ -191,10 +216,10 @@ pub const GenerateAppliancesCmd = struct {
                     );
                     defer allocator.free(device_meta);
 
-                    // Write mocker.json with device-meta
+                    // Write mocker.json with device-meta and automation config
                     var mocker_path_buf: [4096]u8 = undefined;
                     const mocker_path = try std.fmt.bufPrint(&mocker_path_buf, "{s}/config/mocker.json", .{storage_path});
-                    try swarm_workspace.writeMockerJson(allocator, mocker_path, device_meta);
+                    try swarm_workspace.writeMockerJson(allocator, mocker_path, device_meta, ws.automation_json);
                 }
             }
         }

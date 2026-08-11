@@ -22,6 +22,7 @@ pub const SwarmStatusCmd = struct {
 
         std.debug.print("Config files:\n", .{});
         const config_files = [_][]const u8{
+            "swarm.json",
             "autojointoken.txt",
             "group_key.txt",
             "base.json",

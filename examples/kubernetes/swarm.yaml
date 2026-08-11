@@ -1,0 +1,101 @@
+# Pantavisor Mocker swarm in Kubernetes.
+#
+# The whole swarm is driven by a single swarm.json (endpoint, autojoin token,
+# metadata templates, generation counts, automation weights). The pod mounts it
+# into a writable workspace and runs:
+#
+#   pantavisor-mocker swarm run -d /workspace --headless
+#
+# which generates the fleet on first start (skipped if the workspace already
+# has generated content, e.g. on a PersistentVolumeClaim) and then simulates
+# all devices without any interactive input.
+#
+#   kubectl apply -f swarm.yaml
+#   kubectl logs -f deploy/pantavisor-mocker-swarm
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pantavisor-mocker-swarm
+data:
+  swarm.json: |
+    {
+      "pantahub": {
+        "host": "api.stage.pantahub.com",
+        "port": "443",
+        "autojoin_token": "YOUR_AUTOJOIN_TOKEN_HERE"
+      },
+      "group_key": "pantavisor.appliance.serialnumber",
+      "random_keys": [
+        "pantavisor.device.serialnumber"
+      ],
+      "base": {
+        "pantavisor.arch": "aarch64/64/EL",
+        "pantavisor.uname.kernel.name": "Linux",
+        "pantavisor.uname.machine": "aarch64"
+      },
+      "channels": {
+        "FRIDGE0001": {
+          "pantavisor.appliance.serialnumber": "FRIDGE0001"
+        }
+      },
+      "models": [
+        "OrangePi 3 LTS",
+        "Raspberry Pi 3 Model B Plus Rev 1.4"
+      ],
+      "generate": {
+        "appliances": 1,
+        "devices": 0
+      },
+      "automation": {
+        "enabled": true,
+        "invitation": { "accept": 70, "skip": 20, "later": 10 },
+        "update": { "done": 60, "updated": 25, "error": 10, "wontgo": 5 }
+      },
+      "simulate": {
+        "auto": true,
+        "headless": true
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pantavisor-mocker-swarm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pantavisor-mocker-swarm
+  template:
+    metadata:
+      labels:
+        app: pantavisor-mocker-swarm
+    spec:
+      containers:
+        - name: swarm
+          image: ghcr.io/pantavisor/pantavisor-mocker:latest
+          args: ["swarm", "run", "-d", "/workspace", "--headless"]
+          volumeMounts:
+            # Writable workspace where devices/appliances are generated.
+            # Swap for a persistentVolumeClaim to keep device identities
+            # (PH_CREDS_PRN/SECRET) across pod restarts.
+            - name: workspace
+              mountPath: /workspace
+            # The single config file, projected into the workspace.
+            - name: swarm-config
+              mountPath: /workspace/swarm.json
+              subPath: swarm.json
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: workspace
+          emptyDir: {}
+        - name: swarm-config
+          configMap:
+            name: pantavisor-mocker-swarm

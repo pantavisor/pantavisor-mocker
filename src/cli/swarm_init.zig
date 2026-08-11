@@ -1,12 +1,15 @@
 const std = @import("std");
+const swarm_workspace = @import("swarm_workspace.zig");
 
 pub const SwarmInitCmd = struct {
     dir: []const u8 = ".",
+    config: ?[]const u8 = null,
 
     pub const meta = .{
-        .description = "Create a swarm workspace with config file templates.",
+        .description = "Create a swarm workspace with a swarm.json config template.",
         .args = .{
             .dir = .{ .short = 'd', .help = "Target directory for the workspace." },
+            .config = .{ .short = 'c', .help = "Name for the config template (default: swarm.json)." },
         },
     };
 
@@ -24,26 +27,27 @@ pub const SwarmInitCmd = struct {
 
         std.debug.print("Initializing swarm workspace in: {s}\n", .{target_dir});
 
-        var created: u32 = 0;
-
-        created += writeTemplateFile(target_dir, "autojointoken.txt", "YOUR_AUTOJOIN_TOKEN_HERE\n");
-        created += writeTemplateFile(target_dir, "group_key.txt", "pantavisor.appliance.serialnumber\n");
-        created += writeTemplateFile(target_dir, "base.json", BASE_JSON);
-        created += writeTemplateFile(target_dir, "channels.json", CHANNELS_JSON);
-        created += writeTemplateFile(target_dir, "models.txt", MODELS_TXT);
-        created += writeTemplateFile(target_dir, "to_random_keys.txt", RANDOM_KEYS_TXT);
+        const config_name = self.config orelse swarm_workspace.SWARM_JSON_NAME;
+        const created = writeTemplateFile(target_dir, config_name, SWARM_JSON);
 
         // Create subdirectories
         createSubDir(target_dir, "appliances");
         createSubDir(target_dir, "devices");
 
         if (created == 0) {
-            std.debug.print("  All config files already exist. Nothing to create.\n", .{});
+            std.debug.print("  {s} already exists. Nothing to create.\n", .{config_name});
         } else {
-            std.debug.print("\nWorkspace ready ({d} files created).\n", .{created});
-            std.debug.print("Edit the config files as needed, then run:\n", .{});
+            std.debug.print("\nWorkspace ready.\n", .{});
+            std.debug.print("Edit {s} (set pantahub.host and pantahub.autojoin_token), then run:\n", .{config_name});
+            if (self.config != null) {
+                std.debug.print("  pantavisor-mocker swarm run -d {s} -c {s}\n", .{ target_dir, config_name });
+            } else {
+                std.debug.print("  pantavisor-mocker swarm run -d {s}\n", .{target_dir});
+            }
+            std.debug.print("Or step by step:\n", .{});
             std.debug.print("  pantavisor-mocker swarm generate-appliances --count <N>\n", .{});
             std.debug.print("  pantavisor-mocker swarm generate-devices --count <N>\n", .{});
+            std.debug.print("  pantavisor-mocker swarm simulate\n", .{});
         }
     }
 
@@ -75,23 +79,54 @@ pub const SwarmInitCmd = struct {
         std.fs.cwd().makePath(path) catch {};
     }
 
-    const BASE_JSON =
-        "{\n" ++
-        "\t\"pantavisor.arch\": \"aarch64/64/EL\",\n" ++
-        "\t\"pantavisor.uname.kernel.name\": \"Linux\",\n" ++
-        "\t\"pantavisor.uname.machine\": \"aarch64\"\n" ++
-        "}\n";
-
-    const CHANNELS_JSON =
-        "{\n" ++
-        "\t\"FRIDGE0001\": {\n" ++
-        "\t\t\"pantavisor.appliance.serialnumber\": \"FRIDGE0001\"\n" ++
-        "\t}" ++
-        "}\n";
-
-    const MODELS_TXT =
-        "OrangePi 3 LTS\n" ++
-        "Raspberry Pi 3 Model B Plus Rev 1.4\n";
-
-    const RANDOM_KEYS_TXT = "pantavisor.device.serialnumber\n";
+    const SWARM_JSON =
+        \\{
+        \\  "pantahub": {
+        \\    "host": "api.pantahub.com",
+        \\    "port": "443",
+        \\    "autojoin_token": "YOUR_AUTOJOIN_TOKEN_HERE"
+        \\  },
+        \\  "group_key": "pantavisor.appliance.serialnumber",
+        \\  "random_keys": [
+        \\    "pantavisor.device.serialnumber"
+        \\  ],
+        \\  "base": {
+        \\    "pantavisor.arch": "aarch64/64/EL",
+        \\    "pantavisor.uname.kernel.name": "Linux",
+        \\    "pantavisor.uname.machine": "aarch64"
+        \\  },
+        \\  "channels": {
+        \\    "FRIDGE0001": {
+        \\      "pantavisor.appliance.serialnumber": "FRIDGE0001"
+        \\    }
+        \\  },
+        \\  "models": [
+        \\    "OrangePi 3 LTS",
+        \\    "Raspberry Pi 3 Model B Plus Rev 1.4"
+        \\  ],
+        \\  "generate": {
+        \\    "appliances": 1,
+        \\    "devices": 0
+        \\  },
+        \\  "automation": {
+        \\    "enabled": true,
+        \\    "invitation": {
+        \\      "accept": 100,
+        \\      "skip": 0,
+        \\      "later": 0
+        \\    },
+        \\    "update": {
+        \\      "done": 100,
+        \\      "updated": 0,
+        \\      "error": 0,
+        \\      "wontgo": 0
+        \\    }
+        \\  },
+        \\  "simulate": {
+        \\    "auto": true,
+        \\    "headless": false
+        \\  }
+        \\}
+        \\
+    ;
 };

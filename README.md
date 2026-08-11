@@ -338,28 +338,38 @@ Swarm mode lets you generate and manage large fleets of simulated devices from a
 
 ### Quick Start
 
+The whole swarm is described by a single `swarm.json` file: Pantahub endpoint, autojoin token, metadata templates, generation counts, automation weights and simulation options.
+
 ```bash
-# 1. Create a workspace with template config files
+# 1. Create a workspace with a swarm.json config template
 pantavisor-mocker swarm init --dir my-fleet
 
-# 2. Edit config files (set your real token, adjust channels/models)
-cd my-fleet
-vim autojointoken.txt
+# 2. Edit swarm.json (set pantahub.host and pantahub.autojoin_token, adjust channels/models/counts)
+vim my-fleet/swarm.json
 
-# 3. Generate devices and/or appliances
+# 3. Generate (first run only) and simulate everything from that one config
+pantavisor-mocker swarm run --dir my-fleet
+```
+
+Or step by step:
+
+```bash
+cd my-fleet
+
+# Generate devices and/or appliances (counts/endpoint come from swarm.json, flags override)
 pantavisor-mocker swarm generate-devices --count 10
 pantavisor-mocker swarm generate-appliances --count 5
 
-# 4. Check what was generated
+# Check what was generated
 pantavisor-mocker swarm status
 
-# 5. Launch all mockers in tmux sessions
+# Launch all mockers in tmux sessions
 pantavisor-mocker swarm simulate
 
 # Or with automation mode (auto-respond to invitations/updates)
 pantavisor-mocker swarm simulate --auto
 
-# 6. Clean up when done
+# Clean up when done
 pantavisor-mocker swarm clean --target all
 ```
 
@@ -367,24 +377,52 @@ pantavisor-mocker swarm clean --target all
 
 #### `swarm init [--dir <dir>]`
 
-Creates a workspace directory with template configuration files. Existing files are never overwritten.
+Creates a workspace directory with a single `swarm.json` configuration template (never overwritten if it exists), plus empty `appliances/` and `devices/` directories.
 
 ```bash
 pantavisor-mocker swarm init --dir my-fleet
 ```
 
-Generated template files:
+`swarm.json` keys:
 
-| File | Purpose |
+| Key | Purpose |
 |------|---------|
-| `autojointoken.txt` | Pantahub auto-join token for device registration |
-| `group_key.txt` | Metadata key used to group devices (default: `pantavisor.uname.node.name`) |
-| `base.json` | Base device metadata applied to all generated devices |
-| `channels.json` | Channel definitions with channel-specific metadata overlays |
-| `models.txt` | Hardware model names (one per line) |
-| `to_random_keys.txt` | Metadata keys that should receive random numeric values |
+| `pantahub.host` / `pantahub.port` | Pantahub API endpoint written into every generated device (port may be a string or a number) |
+| `pantahub.autojoin_token` | Pantahub auto-join token for device registration (required) |
+| `group_key` | Metadata key used to group devices |
+| `random_keys` | Metadata keys that should receive random numeric values |
+| `base` | Base device metadata applied to all generated devices |
+| `channels` | Channel definitions with channel-specific metadata overlays |
+| `models` | Hardware model names |
+| `generate.appliances` / `generate.devices` | Generation counts used by `swarm run` and as the `--count` default |
+| `automation` | Automation block copied verbatim into each generated `mocker.json` (see Automation Configuration) |
+| `simulate.auto` / `simulate.headless` | Default simulation options used by `swarm run` |
 
-Also creates empty `appliances/` and `devices/` directories.
+**Legacy layout**: workspaces without `swarm.json` still load the old multi-file layout (`autojointoken.txt`, `group_key.txt`, `base.json`, `channels.json`, `models.txt`, `to_random_keys.txt`). When `swarm.json` exists it takes precedence and the legacy files are ignored. Use `swarm convert` to migrate.
+
+**Multiple configurations per folder**: `init`, `generate-*` and `run` accept `-c, --config <file>` to use a different config file (relative to the workspace, or absolute), so variants like `swarm-stage.json` and `swarm-prod.json` can live side by side:
+
+```bash
+pantavisor-mocker swarm init -d my-fleet -c swarm-stage.json
+pantavisor-mocker swarm generate-devices -w my-fleet -d my-fleet/devices-stage -c swarm-stage.json
+pantavisor-mocker swarm run -d my-fleet -c swarm-stage.json
+```
+
+When a config is named explicitly, a missing file is an error (no legacy fallback). Note that `swarm run` always generates into `appliances/`/`devices/` and `simulate` launches every mocker in the workspace regardless of which config generated it — to keep fleets fully separated, generate into distinct output dirs (as above) or use separate workspace directories.
+
+#### `swarm convert [--dir <dir>] [--host <host>] [--port <port>] [--force]`
+
+Converts a legacy multi-file workspace into a single `swarm.json`:
+
+```bash
+pantavisor-mocker swarm convert --dir my-old-fleet
+```
+
+- The legacy config files are merged into the `swarm.json` schema shown above.
+- The Pantahub endpoint and automation block are not stored in the legacy files, so they are recovered from already-generated devices (`pantahub.config` / `mocker.json`) when the workspace has any; `--host`/`--port` override, and the fallback is `api.pantahub.com:443`.
+- `generate` counts are inferred from the existing `appliances/` and `devices/` content.
+- `-o, --output <file>` writes to a different file name (for keeping several configurations in one folder).
+- Refuses to overwrite an existing output file unless `--force` is given. The legacy files are left in place (now ignored) and can be deleted afterwards.
 
 #### `swarm generate-devices --count <N> [options]`
 
@@ -394,11 +432,11 @@ Generates `N` generic simulated devices. Each device gets:
 - Merged device metadata from `base.json` + random keys + group key
 
 **Options:**
-- `-n, --count <N>`: Number of devices to generate (required)
+- `-n, --count <N>`: Number of devices to generate (default: `generate.devices` from `swarm.json`)
 - `-d, --dir <dir>`: Output directory (default: `devices`)
-- `-w, --workspace <dir>`: Workspace directory containing config files (default: `.`)
-- `--host <host>`: Pantahub API host (default: `api.pantahub.com`)
-- `--port <port>`: Pantahub API port (default: `443`)
+- `-w, --workspace <dir>`: Workspace directory containing `swarm.json` or legacy config files (default: `.`)
+- `--host <host>`: Pantahub API host (default: `pantahub.host` from `swarm.json`, else `api.pantahub.com`)
+- `--port <port>`: Pantahub API port (default: `pantahub.port` from `swarm.json`, else `443`)
 
 ```bash
 pantavisor-mocker swarm generate-devices --count 50 --host api.pantahub.com --port 443
@@ -422,11 +460,11 @@ Generates `N` appliances **per channel** defined in `channels.json`. Each applia
 For example, with 2 channels and 2 models, `--count 3` creates `2 × 3 × 2 = 12` mocker instances.
 
 **Options:**
-- `-n, --count <N>`: Number of appliances per channel (required)
+- `-n, --count <N>`: Number of appliances per channel (default: `generate.appliances` from `swarm.json`)
 - `-d, --dir <dir>`: Output directory (default: `appliances`)
-- `-w, --workspace <dir>`: Workspace directory containing config files (default: `.`)
-- `--host <host>`: Pantahub API host (default: `api.pantahub.com`)
-- `--port <port>`: Pantahub API port (default: `443`)
+- `-w, --workspace <dir>`: Workspace directory containing `swarm.json` or legacy config files (default: `.`)
+- `--host <host>`: Pantahub API host (default: `pantahub.host` from `swarm.json`, else `api.pantahub.com`)
+- `--port <port>`: Pantahub API port (default: `pantahub.port` from `swarm.json`, else `443`)
 
 ```bash
 pantavisor-mocker swarm generate-appliances --count 3
@@ -446,9 +484,29 @@ appliances/
           ...
 ```
 
-Each `mocker.json` contains merged metadata from `base.json` + channel overlay + random values + group key + model name.
+Each `mocker.json` contains merged metadata from the base metadata + channel overlay + random values + group key + model name, plus the `automation` block from `swarm.json` (if configured).
 
-#### `swarm simulate [--dir <dir>] [--auto]`
+#### `swarm run [--dir <dir>] [--auto] [--headless]`
+
+One-shot orchestrator driven entirely by `swarm.json`: generates the fleet if the workspace has no generated content yet, then launches the simulation. This is the command to use for containers/Kubernetes — a pod goes from a single config file to a running swarm:
+
+```bash
+pantavisor-mocker swarm run --dir /workspace --headless
+```
+
+**Options:**
+- `-d, --dir <dir>`: Workspace directory containing `swarm.json` (default: `.`)
+- `-c, --config <file>`: Config file to use instead of `swarm.json`
+- `-a, --auto`: Force automation mode (overrides `simulate.auto` from `swarm.json`)
+- `--headless`: Run without the interactive menu (overrides `simulate.headless`)
+
+Behavior:
+- If `generate.appliances` > 0 and `appliances/` is empty, runs `generate-appliances`; same for `generate.devices` and `devices/`. Existing content is never regenerated, so device identities survive restarts when the workspace is on a persistent volume.
+- Simulation options default to the `simulate` block in `swarm.json`; CLI flags force them on.
+
+See `examples/kubernetes/swarm.yaml` for a ready-to-apply ConfigMap + Deployment that mounts `swarm.json` into a writable workspace and runs `swarm run --headless`.
+
+#### `swarm simulate [--dir <dir>] [--auto] [--headless]`
 
 Scans the workspace for all generated `mocker.json` files and launches each one in a separate tmux session.
 
@@ -459,6 +517,7 @@ pantavisor-mocker swarm simulate
 **Options:**
 - `-d, --dir <dir>`: Workspace directory (default: `.`)
 - `-a, --auto`: Enable automation mode for all simulated devices (passes `--auto` to each mocker instance)
+- `--headless`: Run without the interactive menu — monitors the tmux sessions, logs state changes to `simulation.log`, and exits when all sessions have stopped or on `SIGTERM`/`SIGINT` (killing all sessions). Use this in containers where no TTY is attached.
 
 ```bash
 # Launch all mockers with automation enabled
@@ -504,13 +563,16 @@ Appliance mockers: 12
 Device mockers:    50
 
 Config files:
-  [OK] autojointoken.txt
-  [OK] group_key.txt
-  [OK] base.json
-  [OK] channels.json
-  [OK] models.txt
-  [OK] to_random_keys.txt
+  [OK] swarm.json
+  [--] autojointoken.txt (missing)
+  [--] group_key.txt (missing)
+  [--] base.json (missing)
+  [--] channels.json (missing)
+  [--] models.txt (missing)
+  [--] to_random_keys.txt (missing)
 ```
+
+(The legacy files are only needed when `swarm.json` is absent.)
 
 #### `swarm clean [--target <appliances|devices|all>] [--dir <dir>]`
 
