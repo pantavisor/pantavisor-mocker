@@ -38,6 +38,9 @@ pub fn printHelp(exe_name: []const u8) void {
 
 test {
     _ = @import("framework.zig");
+    _ = @import("swarm_workspace.zig");
+    _ = @import("device_config.zig");
+    _ = @import("swarm_device.zig");
 }
 
 test "parse init" {

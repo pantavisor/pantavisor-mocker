@@ -221,11 +221,11 @@ fn dupeStrings(allocator: std.mem.Allocator, list: *std.ArrayList([]const u8), i
     }
 }
 
-fn serializeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) ![]u8 {
+pub fn serializeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) ![]u8 {
     return std.fmt.allocPrint(allocator, "{f}", .{std.json.fmt(value, .{})});
 }
 
-fn portToString(allocator: std.mem.Allocator, port: std.json.Value) ![]u8 {
+pub fn portToString(allocator: std.mem.Allocator, port: std.json.Value) ![]u8 {
     return switch (port) {
         .string => |s| try allocator.dupe(u8, s),
         .integer => |n| try std.fmt.allocPrint(allocator, "{d}", .{n}),

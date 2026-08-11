@@ -2,6 +2,46 @@
 
 Pantavisor Mocker is a tool designed to mock the functionality of [Pantavisor](https://pantavisor.io/) and how it interacts with [Pantahub](https://api.pantahub.com). It allows you to simulate core device operations—such as registration, metadata synchronization, and OTA (Over-The-Air) update flows—without requiring actual hardware or a full Pantavisor runtime.
 
+Everything is driven by single-file JSON configs: a [`device.json`](#one-file-device-config-devicejson) describes one device, a [`swarm.json`](#swarm-mode-fleet-simulation) describes a whole fleet — locally, in [Docker](#running-in-docker), or in [Kubernetes](#running-in-kubernetes).
+
+## Quick Start
+
+Get the binary (see [Build and Installation](#build-and-installation)) or use the Docker image `ghcr.io/pantavisor/pantavisor-mocker:latest`. You need a Pantahub **auto-join token** so devices can register themselves.
+
+**Simulate one device** — describe it in one JSON and start it:
+
+```bash
+cat > device.json <<'EOF'
+{
+  "pantahub": { "host": "api.pantahub.com", "port": "443", "autojoin_token": "YOUR_AUTO_TOKEN" },
+  "device-meta": { "pantavisor.dtmodel": "My Test Device" },
+  "automation": { "enabled": true }
+}
+EOF
+
+pantavisor-mocker start -s my-device -c device.json
+```
+
+The mocker registers a new device with the auto-token, syncs metadata, and processes OTA updates. All state — including the device identity — lives in `my-device/`, so running the same command again resumes the same device.
+
+**Simulate a fleet (swarm)** — one `swarm.json` describes the whole fleet:
+
+```bash
+pantavisor-mocker swarm init -d my-fleet   # writes a swarm.json template
+vim my-fleet/swarm.json                    # set pantahub.host + autojoin_token
+pantavisor-mocker swarm run -d my-fleet    # generate the fleet + simulate it
+```
+
+**Simulate a fleet in containers** — one device per container, with per-device logs:
+
+```bash
+cp my-fleet/swarm.json examples/docker/ && cd examples/docker
+docker compose up -d --scale device=10
+docker compose logs -f
+```
+
+See [Running in Docker](#running-in-docker) and [Running in Kubernetes](#running-in-kubernetes) for details.
+
 ## What is Pantavisor?
 
 [Pantavisor](https://pantavisor.io/) is a framework for building embedded Linux systems using lightweight Linux Containers (LXC). It turns the entire userland, including the OS, networking, and applications, into modular, portable, and manageable building blocks.
@@ -15,6 +55,8 @@ Pantavisor Mocker specifically simulates the **Pantavisor Runtime** behavior reg
 
 ## Features
 
+- **Single-file JSON configuration**: one `device.json` per device, one `swarm.json` per fleet — including the Pantahub endpoint, token, metadata and automation behavior.
+- **Container-native swarms**: run one device per Docker container or Kubernetes pod (`swarm device`), or a whole fleet in one container (`swarm run --headless`).
 - **Device Registration**: Automatically registers a new device using a factory auto-token.
 - **Metadata Synchronization**:
   - Syncs **Device Metadata** (system info, storage, etc.) to the cloud.
@@ -34,7 +76,47 @@ Pantavisor Mocker specifically simulates the **Pantavisor Runtime** behavior reg
 
 ## Configuration
 
-The application state and configuration are stored in the `storage/` directory.
+### One-file device config: `device.json`
+
+The recommended way to configure a single device is one JSON file, applied with `init -c` or `start -c`:
+
+```json
+{
+  "pantahub": {
+    "host": "api.pantahub.com",
+    "port": "443",
+    "autojoin_token": "YOUR_AUTO_TOKEN"
+  },
+  "device-meta": {
+    "pantavisor.arch": "aarch64/64/EL",
+    "pantavisor.dtmodel": "My Test Device",
+    "custom.site": "lab-1"
+  },
+  "automation": { "enabled": true, "update": { "done": 100 } },
+  "intervals": { "devmeta": 10, "usrmeta": 10 }
+}
+```
+
+| Key | Purpose |
+|-----|---------|
+| `pantahub.host` / `pantahub.port` | Pantahub API endpoint (port may be a string or a number) |
+| `pantahub.autojoin_token` | Auto-join token used for device registration |
+| `device-meta` | Custom device metadata pushed to the cloud |
+| `automation` | Auto-respond behavior for invitations/updates (see [Automation Configuration](#automation-configuration)) |
+| `intervals.devmeta` / `intervals.usrmeta` | Metadata sync intervals in seconds |
+
+```bash
+# apply once, then start
+pantavisor-mocker init -s my-device -c device.json
+pantavisor-mocker start -s my-device
+
+# or apply on every start (initializes the storage on first run)
+pantavisor-mocker start -s my-device -c device.json
+```
+
+Re-applying is always safe: the registration credentials the device obtains (`PH_CREDS_PRN`/`PH_CREDS_SECRET`) are never touched, so the device keeps its identity. On `init`, the `--token/--host/--port` flags override the file's values.
+
+The rest of this section describes the files inside the storage directory that the device config writes for you — useful to understand or tweak a device by hand.
 
 ### Main Configuration: `storage/config/pantahub.config`
 
@@ -76,30 +158,94 @@ When the mocker starts, if these files exist and the device has not yet been ver
 2. Call the ownership validation endpoint using the provided TLS certificate and key.
 3. Upon success, update the local device metadata (`ovmode_status: completed`) and proceed with normal operation.
 
-## Usage
+## Running in Docker
 
-Once installed or added to your PATH, you can use the `pantavisor-mocker` command.
+The pre-built image `ghcr.io/pantavisor/pantavisor-mocker:latest` (also tagged per release, e.g. `:v0.1.0`) has the CLI as its entrypoint. Since containers have no TTY for the interactive prompts, enable `automation` in your config so devices answer invitations and updates on their own.
 
-### Docker Usage
+### Single device
 
-You can run the mocker using the pre-built Docker image from the GitHub Container Registry.
+Mount a [`device.json`](#one-file-device-config-devicejson) and a storage volume; the device initializes itself on first start and keeps its identity in the volume:
 
-#### 1. Initialize Storage with Docker
 ```bash
-docker run -it -v ${PWD}/storage:/app/storage \
-	--name pantavisor \
+docker run -d --name my-device \
+	-v ${PWD}/device.json:/device.json:ro \
+	-v my-device-storage:/app/storage \
 	ghcr.io/pantavisor/pantavisor-mocker:latest \
-	init --token YOUR_AUTO_TOKEN_HERE
+	start -c /device.json --no-tui
+
+docker logs -f my-device
 ```
 
-#### 2. Run the Mocker with Docker
-```bash
-docker run -it \
-	-v ${PWD}/storage:/app/storage \
-	--name pantavisor \
-	ghcr.io/pantavisor/pantavisor-mocker:latest \
- start
+### Swarm: one container per device (recommended)
+
+Each container runs `swarm device`: on first start it provisions **one** device from a shared [`swarm.json`](#swarm-mode-fleet-simulation) (picking a random model and, with `--channel random`, a random channel) and then runs it in the foreground. One device = one container = one log stream, and the fleet size is just the number of replicas.
+
+Using `examples/docker/docker-compose.yaml`:
+
+```yaml
+services:
+  device:
+    image: ghcr.io/pantavisor/pantavisor-mocker:latest
+    command: ["swarm", "device", "-c", "/swarm.json", "--channel", "random"]
+    volumes:
+      - ./swarm.json:/swarm.json:ro
+    restart: unless-stopped
+    deploy:
+      replicas: 5
 ```
+
+```bash
+cd examples/docker            # put your swarm.json next to the compose file
+docker compose up -d --scale device=10
+
+docker compose logs -f        # all devices
+docker logs -f docker-device-3  # one device
+docker compose down           # add -v to also discard the device identities
+```
+
+Each container stores its device state in an anonymous per-container volume (`/app/storage`), so identities survive restarts and are dropped when the container is removed. The `generate` and `simulate` blocks of `swarm.json` are not used in this mode — replicas define the fleet.
+
+### Swarm: whole fleet in one container
+
+Alternatively, `swarm run --headless` generates and simulates the entire fleet inside a single container using tmux sessions:
+
+```bash
+docker run -d --name my-swarm \
+	-v ${PWD}/my-fleet:/workspace \
+	ghcr.io/pantavisor/pantavisor-mocker:latest \
+	swarm run -d /workspace --headless
+
+docker logs -f my-swarm       # simulation manager output
+```
+
+`/workspace` must contain a `swarm.json`; generated devices and `simulation.log` land next to it. This mode is more compact (one container for hundreds of devices) but the per-device output lives in tmux sessions inside the container (`docker exec -it my-swarm tmux attach -t <session>`) rather than in `docker logs` — prefer one-container-per-device when you want container-native logs.
+
+## Running in Kubernetes
+
+Ready-to-apply manifests live in `examples/kubernetes/`. Both are driven by the same `swarm.json`, shipped as a ConfigMap. For real deployments move the `autojoin_token` into a Secret.
+
+### One pod per device: `swarm-devices.yaml` (recommended)
+
+A StatefulSet where every pod runs `swarm device`: it provisions its own device from the shared config on first start and keeps the identity on its own PersistentVolumeClaim, so restarts and reschedules resume the same registered devices. You get `kubectl logs` per device and scale the fleet with replicas:
+
+```bash
+kubectl apply -f examples/kubernetes/swarm-devices.yaml
+
+kubectl scale statefulset pantavisor-mocker-device --replicas=20
+kubectl logs -f pantavisor-mocker-device-3      # logs of device #3
+kubectl delete -f examples/kubernetes/swarm-devices.yaml   # PVCs (identities) remain unless deleted too
+```
+
+### Whole fleet in one pod: `swarm.yaml`
+
+A Deployment running `swarm run -d /workspace --headless`: the pod generates the fleet on first start (into an `emptyDir`, or a PVC if you want identities to survive) and simulates all devices via tmux inside the single container:
+
+```bash
+kubectl apply -f examples/kubernetes/swarm.yaml
+kubectl logs -f deploy/pantavisor-mocker-swarm  # simulation manager output
+```
+
+Use this when you want the smallest footprint; use the StatefulSet when you want per-device pods, logs and lifecycle.
 
 ## Build and Installation
 
@@ -133,11 +279,15 @@ export PATH="$PATH:$(pwd)/zig-out/bin"
 
 
 #### 1. Initialize Storage
-Use the `init` command to create the necessary directory structure and default configuration. You can optionally provide a Pantahub Auto-Token during initialization.
+Use the `init` command to create the necessary directory structure and default configuration — either from a [`device.json`](#one-file-device-config-devicejson) or with flags:
 ```bash
+# from a device config file (recommended)
+pantavisor-mocker init --storage my_storage -c device.json
+
+# or with flags
 pantavisor-mocker init --storage my_storage --token YOUR_AUTO_TOKEN_HERE
 ```
-*If `--storage` is omitted, it defaults to `./storage`. If `--token` is provided, it will be saved to the configuration for automatic registration.*
+*If `--storage` is omitted, it defaults to `./storage`. If `--token` is provided, it will be saved to the configuration for automatic registration. You can also skip `init` entirely: `start -c device.json` initializes the storage on first run.*
 
 #### 2. Configure Auto-Token (Manual)
 If you didn't provide a token during `init`, you can manually add your Pantahub Auto-Token to `my_storage/config/pantahub.config`:
@@ -351,6 +501,8 @@ vim my-fleet/swarm.json
 pantavisor-mocker swarm run --dir my-fleet
 ```
 
+To run the same fleet in containers instead — one device per container/pod with its own log stream — see [Running in Docker](#running-in-docker) and [Running in Kubernetes](#running-in-kubernetes).
+
 Or step by step:
 
 ```bash
@@ -429,7 +581,7 @@ pantavisor-mocker swarm convert --dir my-old-fleet
 Generates `N` generic simulated devices. Each device gets:
 - A random 8-character hex ID
 - A `mocker` service directory with standard `pantahub.config` and `mocker.json`
-- Merged device metadata from `base.json` + random keys + group key
+- Merged device metadata from the base metadata + random keys + group key
 
 **Options:**
 - `-n, --count <N>`: Number of devices to generate (default: `generate.devices` from `swarm.json`)
@@ -505,6 +657,23 @@ Behavior:
 - Simulation options default to the `simulate` block in `swarm.json`; CLI flags force them on.
 
 See `examples/kubernetes/swarm.yaml` for a ready-to-apply ConfigMap + Deployment that mounts `swarm.json` into a writable workspace and runs `swarm run --headless`.
+
+#### `swarm device [--config <file>] [--storage <dir>] [options]`
+
+Runs a **single** swarm member as its own foreground process — the one-device-per-container entrypoint (see [Running in Docker](#running-in-docker) / [Running in Kubernetes](#running-in-kubernetes)). On first start it provisions one device from the swarm config (device id, merged metadata, automation block, endpoint) into the storage directory; later starts detect the existing identity and just run it:
+
+```bash
+pantavisor-mocker swarm device -c my-fleet/swarm.json -s device1-storage --channel random
+```
+
+**Options:**
+- `-c, --config <file>`: Path to the swarm config JSON (default: `swarm.json`)
+- `-s, --storage <dir>`: Storage directory for this device's identity and state (default: `storage`)
+- `--channel <name|random>`: Apply a channel overlay from the config — a specific channel, or a random one. Omit for a generic device.
+- `--model <name>`: Model name (default: picked at random from the config's `models`)
+- `-a, --auto`, `--debug`, `--one-shot`: Same as `start`
+
+Runs with the plain stdout renderer (no TUI), so logs go to the container runtime. The `generate` and `simulate` blocks of `swarm.json` are ignored — the number of running `swarm device` instances *is* the fleet.
 
 #### `swarm simulate [--dir <dir>] [--auto] [--headless]`
 
@@ -589,47 +758,9 @@ pantavisor-mocker swarm clean --target appliances
 pantavisor-mocker swarm clean --target all
 ```
 
-### Workspace Configuration Files
+### Legacy Workspace Files
 
-#### `base.json`
-
-Base metadata applied to **all** generated devices and appliances:
-
-```json
-{
-  "pantavisor.arch": "aarch64/64/EL",
-  "pantavisor.uname.kernel.name": "Linux",
-  "pantavisor.uname.machine": "aarch64"
-}
-```
-
-#### `channels.json`
-
-Defines named channels with metadata overlays. Used by `generate-appliances`:
-
-```json
-{
-  "FRIDGE0001": {
-    "pantavisor.appliance.serialnumber": "FRIDGE0001"
-  }
-}
-```
-
-#### `to_random_keys.txt`
-
-Metadata keys listed here receive a unique random numeric value per device/appliance:
-
-```
-pvmocks.random_key
-```
-
-#### `group_key.txt`
-
-The metadata key whose value is set to the device/appliance hex ID, useful for grouping:
-
-```
-pantavisor.uname.node.name
-```
+Before `swarm.json`, a workspace was described by six separate files: `autojointoken.txt`, `group_key.txt`, `base.json` (base metadata for all devices), `channels.json` (channel overlays), `models.txt` (one model per line) and `to_random_keys.txt` (keys that get random values). They still load when no `swarm.json` is present, and map 1:1 onto the `swarm.json` keys shown above — run [`swarm convert`](#swarm-convert---dir-dir---host-host---port-port---force) to migrate a workspace to the single-file format.
 
 ## Architecture
 

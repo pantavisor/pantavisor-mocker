@@ -1,0 +1,116 @@
+# Simulate a swarm with one pantavisor-mocker device per pod.
+#
+# A StatefulSet runs N replicas; each pod provisions its own device from the
+# shared swarm.json on first start (random model, random channel) and keeps
+# its identity (PH_CREDS_PRN/SECRET) on its own PersistentVolumeClaim, so
+# restarts and reschedules keep the same registered devices. Scale the fleet
+# with replicas:
+#
+#   kubectl apply -f swarm-devices.yaml
+#   kubectl scale statefulset pantavisor-mocker-device --replicas=20
+#   kubectl logs -f pantavisor-mocker-device-3        # per-device logs
+#
+# Enable "automation" in swarm.json so devices answer invitations/updates on
+# their own — pods have no TTY. The "generate" and "simulate" blocks are not
+# used in this mode (replicas define the fleet size).
+#
+# Alternative: swarm.yaml runs the whole fleet inside a single pod via tmux
+# (`swarm run --headless`) — fewer pods, but one shared log stream.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pantavisor-mocker-swarm-devices
+data:
+  swarm.json: |
+    {
+      "pantahub": {
+        "host": "api.stage.pantahub.com",
+        "port": "443",
+        "autojoin_token": "YOUR_AUTOJOIN_TOKEN_HERE"
+      },
+      "group_key": "pantavisor.appliance.serialnumber",
+      "random_keys": [
+        "pantavisor.device.serialnumber"
+      ],
+      "base": {
+        "pantavisor.arch": "aarch64/64/EL",
+        "pantavisor.uname.kernel.name": "Linux",
+        "pantavisor.uname.machine": "aarch64"
+      },
+      "channels": {
+        "FRIDGE0001": {
+          "pantavisor.appliance.serialnumber": "FRIDGE0001"
+        }
+      },
+      "models": [
+        "OrangePi 3 LTS",
+        "Raspberry Pi 3 Model B Plus Rev 1.4"
+      ],
+      "automation": {
+        "enabled": true,
+        "invitation": { "accept": 70, "skip": 20, "later": 10 },
+        "update": { "done": 60, "updated": 25, "error": 10, "wontgo": 5 }
+      }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pantavisor-mocker-device
+spec:
+  clusterIP: None
+  selector:
+    app: pantavisor-mocker-device
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pantavisor-mocker-device
+spec:
+  serviceName: pantavisor-mocker-device
+  replicas: 5
+  selector:
+    matchLabels:
+      app: pantavisor-mocker-device
+  template:
+    metadata:
+      labels:
+        app: pantavisor-mocker-device
+    spec:
+      containers:
+        - name: device
+          image: ghcr.io/pantavisor/pantavisor-mocker:latest
+          args:
+            - swarm
+            - device
+            - -c
+            - /config/swarm.json
+            - -s
+            - /storage
+            - --channel
+            - random
+          volumeMounts:
+            - name: storage
+              mountPath: /storage
+            - name: swarm-config
+              mountPath: /config
+              readOnly: true
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+      volumes:
+        - name: swarm-config
+          configMap:
+            name: pantavisor-mocker-swarm-devices
+  volumeClaimTemplates:
+    - metadata:
+        name: storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 200Mi

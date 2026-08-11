@@ -1,0 +1,27 @@
+# Simulate a swarm with one pantavisor-mocker device per container.
+#
+# Each replica provisions its own device from the shared swarm.json on first
+# start (random model, random channel) and keeps its identity in an anonymous
+# per-container volume, so you get one registered device — and one log
+# stream — per container.
+#
+#   docker compose up -d --scale device=10
+#   docker compose logs -f          # all devices
+#   docker compose logs -f device   # or docker logs <container> for one
+#   docker compose down             # -v to also drop the device identities
+#
+# Put your swarm.json next to this file (see ../kubernetes/swarm.yaml or
+# `pantavisor-mocker swarm init` for the schema). Enable "automation" in it so
+# devices answer invitations/updates on their own — there is no TTY here.
+services:
+  device:
+    image: ghcr.io/pantavisor/pantavisor-mocker:latest
+    command: ["swarm", "device", "-c", "/swarm.json", "--channel", "random"]
+    volumes:
+      - ./swarm.json:/swarm.json:ro
+    # Device state lands in /app/storage (a VOLUME of the image), so each
+    # container gets its own anonymous volume: identity survives restarts,
+    # and is discarded when the container is removed.
+    restart: unless-stopped
+    deploy:
+      replicas: 5

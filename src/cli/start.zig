@@ -1,5 +1,6 @@
 const std = @import("std");
 const constants = @import("../core/constants.zig");
+const device_config = @import("device_config.zig");
 const core_mocker = @import("../core/mocker.zig");
 const router_mod = @import("../core/router.zig");
 const logger_subsystem = @import("../core/logger_subsystem.zig");
@@ -69,6 +70,7 @@ pub const StartCmd = struct {
     debug: bool = false,
     @"no-tui": bool = false,
     auto: bool = false,
+    config: ?[]const u8 = null,
 
     pub const meta = .{
         .description = "Start the main mocker process.",
@@ -78,10 +80,17 @@ pub const StartCmd = struct {
             .debug = .{ .help = "Enable debug logging." },
             .@"no-tui" = .{ .help = "Disable TUI mode." },
             .auto = .{ .short = 'a', .help = "Enable automation mode (auto-respond to invitations/updates based on mocker.json config)." },
+            .config = .{ .short = 'c', .help = "Device config JSON applied to the storage before starting (initializes it on first run)." },
         },
     };
 
     pub fn run(self: @This(), allocator: std.mem.Allocator) !void {
+        // Config-driven start: scaffold/refresh the storage from the device
+        // config so a container can go from one JSON to a running device.
+        if (self.config) |config_path| {
+            try device_config.apply(allocator, self.storage, config_path, .{});
+        }
+
         var mocker = core_mocker.Mocker.init(allocator, self.storage, self.@"one-shot", self.debug, self.auto);
         defer mocker.deinit();
 

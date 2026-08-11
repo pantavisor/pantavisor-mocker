@@ -1,0 +1,35 @@
+style: github
+template: CHANGELOG.tpl.md
+info:
+  title: CHANGELOG
+  repository_url: https://github.com/pantavisor/pantavisor-mocker
+options:
+  commits:
+    filters:
+      Type:
+        - feature
+        - feat
+        - fix
+        - chore
+        - doc
+        - docs
+        - refactor
+        - perf
+  commit_groups:
+    title_maps:
+      feature: Features
+      feat: Features
+      fix: Bug Fixes
+      perf: Performance
+      refactor: Refactoring
+      doc: Documentation
+      docs: Documentation
+      chore: Maintenance
+  header:
+    pattern: "^(\\w+)\\s*:\\s*(.*)$"
+    pattern_maps:
+      - Type
+      - Subject
+  notes:
+    keywords:
+      - BREAKING CHANGE
