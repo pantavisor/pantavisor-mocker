@@ -44,7 +44,8 @@ pub fn parse(allocator: std.mem.Allocator, comptime T: type, args: []const []con
             }
 
             inline for (u_info.fields) |field| {
-                if (std.mem.eql(u8, field.name, cmd_name)) {
+                const is_version_alias = std.mem.eql(u8, cmd_name, "--version") and std.mem.eql(u8, field.name, "version");
+                if (std.mem.eql(u8, field.name, cmd_name) or is_version_alias) {
                     const sub_result = try parse(allocator, field.type, remaining_args);
                     return @unionInit(T, field.name, sub_result);
                 }

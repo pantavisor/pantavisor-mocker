@@ -1,4 +1,5 @@
 const std = @import("std");
+const package = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -16,6 +17,9 @@ pub fn build(b: *std.Build) void {
         else => std.builtin.OptimizeMode.ReleaseSafe,
     };
 
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "cli_version", package.version);
+
     const vaxis_dep = b.dependency("vaxis", .{
         .target = target,
         .optimize = optimize,
@@ -31,6 +35,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.addImport("vaxis", vaxis_mod);
+    exe.root_module.addOptions("build_options", build_options);
 
     exe.addCSourceFile(.{ .file = b.path("src/net/curl_shim.c") });
     exe.linkLibC();
@@ -54,6 +59,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     app_mod.addImport("vaxis", vaxis_mod);
+    app_mod.addOptions("build_options", build_options);
 
     const exe_unit_tests = b.addTest(.{
         .root_module = b.createModule(.{

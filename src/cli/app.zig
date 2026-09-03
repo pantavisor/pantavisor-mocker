@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const build_options = @import("build_options");
 pub const framework = @import("framework.zig");
 const init_mod = @import("init.zig");
 const start_mod = @import("start.zig");
@@ -10,10 +12,19 @@ pub const InitCmd = init_mod.InitCmd;
 pub const StartCmd = start_mod.StartCmd;
 pub const SwarmCmd = swarm_mod.SwarmCmd;
 
+pub const VersionCmd = struct {
+    pub const meta = .{ .description = "Print version information." };
+
+    pub fn run(_: @This(), _: std.mem.Allocator) !void {
+        std.debug.print("pantavisor-mocker {s}\nbuilt with Zig {s}\n", .{ build_options.cli_version, builtin.zig_version_string });
+    }
+};
+
 pub const Cli = union(enum) {
     init: InitCmd,
     start: StartCmd,
     swarm: SwarmCmd,
+    version: VersionCmd,
 
     pub const meta = .{
         .description = "Pantavisor Mocker - Device simulation tool",
@@ -49,6 +60,16 @@ test "parse init" {
     try std.testing.expect(result == .init);
     try std.testing.expectEqualStrings("abc", result.init.token.?);
     try std.testing.expectEqualStrings("p.com", result.init.host.?);
+}
+
+test "parse version" {
+    const result = try parse(std.testing.allocator, &[_][]const u8{"exe", "version"});
+    try std.testing.expect(result == .version);
+}
+
+test "parse --version" {
+    const result = try parse(std.testing.allocator, &[_][]const u8{"exe", "--version"});
+    try std.testing.expect(result == .version);
 }
 
 test "parse start" {
