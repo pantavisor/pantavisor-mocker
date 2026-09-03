@@ -71,7 +71,8 @@ Pantavisor Mocker specifically simulates the **Pantavisor Runtime** behavior reg
   - **Robust Recovery**: Handles interrupted updates and implements immediate rollback on failure.
 - **Logging**: Captures and pushes logs to Pantahub.
 - **pvcontrol Server**: Provides a Unix domain socket server that implements the Pantavisor Control API, allowing container-side tools like `pvcontrol` to interact with the mocker.
-- **Fleet Invitation Protocol**: Simulates user consent flows (Accept/Skip) for managed fleet updates.
+- **Fleet Invitation Protocol**: Simulates user consent flows (Accept/Skip) for managed fleet-wide updates.
+- **Garbage Collector**: Periodically removes old revisions (always keeping revision 0, the stable/rollback revision and the running one), deletes their objects and stale logs; retention is configurable.
 - **TLS Ownership Validation**: Supports device ownership verification using client-side TLS certificates.
 
 ## Configuration
@@ -93,7 +94,8 @@ The recommended way to configure a single device is one JSON file, applied with 
     "custom.site": "lab-1"
   },
   "automation": { "enabled": true, "update": { "done": 100 } },
-  "intervals": { "devmeta": 10, "usrmeta": 10 }
+  "intervals": { "devmeta": 10, "usrmeta": 10 },
+  "gc": { "interval": 3600, "logs_max_age": 604800 }
 }
 ```
 
@@ -104,6 +106,7 @@ The recommended way to configure a single device is one JSON file, applied with 
 | `device-meta` | Custom device metadata pushed to the cloud |
 | `automation` | Auto-respond behavior for invitations/updates (see [Automation Configuration](#automation-configuration)) |
 | `intervals.devmeta` / `intervals.usrmeta` | Metadata sync intervals in seconds |
+| `gc.interval` / `gc.logs_max_age` | Garbage collector: run interval and log retention, in seconds (see [Garbage Collector](#garbage-collector)) |
 
 ```bash
 # apply once, then start
@@ -129,6 +132,22 @@ This file contains the core connectivity and credential settings. Key parameters
 - `PH_FACTORY_AUTOTOK`: The auto-token used for initial device registration (required for new devices).
 - `PH_METADATA_DEVMETA_INTERVAL`: Interval (in seconds) to push device metadata.
 - `PH_METADATA_USRMETA_INTERVAL`: Interval (in seconds) to pull user metadata.
+- `PH_GC_INTERVAL`: Interval (in seconds) between garbage collector runs; `0` disables the GC (default: `3600`).
+- `PH_GC_LOGS_MAX_AGE`: Delete a revision's logs after this many seconds without writes; `0` keeps them until the revision is removed (default: `604800` = 7 days).
+
+### Garbage Collector
+
+Every `PH_GC_INTERVAL` seconds the mocker reclaims storage occupied by superseded revisions. The keep set is:
+
+- **Revision 0** — the factory revision.
+- **The stable revision** — the rollback point while an update is in flight.
+- **The running revision** (`try_rev`).
+
+Everything else under `trails/` and `logs/` is deleted (a device at revision 9 keeps only 0 and 9; during an update to 10, revision 9 is protected as the rollback point).
+
+Objects are content-addressed and shared across revisions, so each revision records the objects it needs in a manifest (`trails/<rev>/.pvr/objects`, written by the update flow and by `pvcontrol` object uploads). The GC protects the union of the kept revisions' manifests and deletes any other file in `objects/` — objects shared with a kept revision survive. Storages that predate manifests keep all objects until their next successful update writes one.
+
+Log directories of removed revisions are deleted along with the revision; log dirs of kept revisions are additionally deleted after `PH_GC_LOGS_MAX_AGE` seconds without writes (the running revision's log is always kept).
 
 ### Metadata Overrides: `storage/config/mocker.json`
 

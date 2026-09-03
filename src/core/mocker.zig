@@ -15,6 +15,7 @@ const router_mod = @import("router.zig");
 const ipc = @import("ipc.zig");
 const messages = @import("messages.zig");
 const automation = @import("automation.zig");
+const gc = @import("gc.zig");
 pub const pvcontrol_server = @import("pvcontrol_server.zig");
 
 const boot_state = constants.BOOT_STATE_JSON;
@@ -325,8 +326,14 @@ pub const Mocker = struct {
             ctx.allocator.destroy(ph_client_ptr);
         }
 
-        try ensure_registered_and_logged_in(ctx.allocator, &store, &log, ph_client_ptr, &cfg, &revisions);
-        try check_tls_ownership(ctx.allocator, &store, &log, ph_client_ptr, &cfg, &meta);
+        // Registration/login failures are recoverable: keep the daemon alive
+        // and retry in every cycle instead of crashing on a Pantahub outage.
+        ensure_registered_and_logged_in(ctx.allocator, &store, &log, ph_client_ptr, &cfg, &revisions) catch |err| {
+            log.log("Pantahub registration/login failed ({any}); running offline and retrying", .{err});
+        };
+        check_tls_ownership(ctx.allocator, &store, &log, ph_client_ptr, &cfg, &meta) catch |err| {
+            log.log("TLS ownership check failed ({any}); continuing", .{err});
+        };
 
         var pending_inv: ?invitation.InviteToken = null;
         defer if (pending_inv) |inv| invitation.free_invite(ctx.allocator, inv);
@@ -344,14 +351,40 @@ pub const Mocker = struct {
         meta: *meta_mod.Meta,
         pending_inv: *?invitation.InviteToken,
     ) !void {
+        var gc_state = gc.GcState{};
         while (!ctx.quit_flag.load(.acquire)) {
-            try check_and_process_claim(ctx.allocator, store, log, ph_client, cfg);
+            // A Pantahub outage must not kill the daemon: log and retry next
+            // cycle. Local duties (pvcontrol, GC) keep running regardless.
+            check_and_process_claim(ctx.allocator, store, log, ph_client, cfg) catch |err| {
+                log.log("Claim check failed ({any}); retrying next cycle", .{err});
+            };
 
             if (cfg.is_claimed) {
-                try self.process_invitation_cycle(ctx, store, log, ph_client, cfg, meta, pending_inv);
-                try self.process_update_cycle(ctx, store, log, ph_client, cfg);
-                try self.sync_and_push(ctx, store, log, ph_client, cfg, meta);
+                // Pantahub calls assert on a missing token; when the last login
+                // failed (e.g. Pantahub outage) retry it here every cycle and
+                // skip the API-dependent steps until it succeeds.
+                if (ph_client.token == null and cfg.creds_prn != null and cfg.creds_secret != null) {
+                    ph_client.login(cfg.creds_prn.?, cfg.creds_secret.?) catch |err| {
+                        log.log("Login retry failed ({any}); retrying next cycle", .{err});
+                    };
+                }
+                if (ph_client.token != null) {
+                    self.process_invitation_cycle(ctx, store, log, ph_client, cfg, meta, pending_inv) catch |err| {
+                        log.log("Invitation cycle failed ({any}); retrying next cycle", .{err});
+                    };
+                    self.process_update_cycle(ctx, store, log, ph_client, cfg) catch |err| {
+                        log.log("Update cycle failed ({any}); retrying next cycle", .{err});
+                    };
+                    self.sync_and_push(ctx, store, log, ph_client, cfg, meta) catch |err| {
+                        log.log("Metadata sync/push failed ({any}); retrying next cycle", .{err});
+                    };
+                }
             }
+
+            gc.maybeRun(ctx.allocator, store, .{
+                .interval_s = cfg.gc_interval_s,
+                .logs_max_age_s = cfg.gc_logs_max_age_s,
+            }, &gc_state);
 
             if (ctx.is_one_shot) {
                 break;

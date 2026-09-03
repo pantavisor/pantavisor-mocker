@@ -2,7 +2,19 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    // Default to ReleaseSafe (the shipped configuration); -Doptimize=<mode>
+    // or --release=<mode> still overrides. Debug builds also hit the GCC-16
+    // crt1.o/sframe link bug on newer toolchains, so tests default to
+    // ReleaseSafe too.
+    const optimize = b.option(
+        std.builtin.OptimizeMode,
+        "optimize",
+        "Prioritize performance, safety, or binary size",
+    ) orelse switch (b.release_mode) {
+        .fast => std.builtin.OptimizeMode.ReleaseFast,
+        .small => std.builtin.OptimizeMode.ReleaseSmall,
+        else => std.builtin.OptimizeMode.ReleaseSafe,
+    };
 
     const vaxis_dep = b.dependency("vaxis", .{
         .target = target,

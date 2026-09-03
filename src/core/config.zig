@@ -15,6 +15,8 @@ pub const Config = struct {
     is_claimed: bool = false,
     devmeta_interval_s: u64 = 60,
     usrmeta_interval_s: u64 = 60,
+    gc_interval_s: u64 = 3600,
+    gc_logs_max_age_s: u64 = 604800,
     factory_autotok: ?[]const u8 = null,
     client_cert: ?[]const u8 = null,
     client_key: ?[]const u8 = null,
@@ -138,6 +140,11 @@ pub fn load(allocator: std.mem.Allocator, store: local_store.LocalStore, log: an
             cfg.devmeta_interval_s = @min(std.fmt.parseInt(u64, trimmed_value, 10) catch 60, 86_400);
         } else if (std.mem.eql(u8, key, "PH_METADATA_USRMETA_INTERVAL")) {
             cfg.usrmeta_interval_s = @min(std.fmt.parseInt(u64, trimmed_value, 10) catch 60, 86_400);
+        } else if (std.mem.eql(u8, key, "PH_GC_INTERVAL")) {
+            // Cap to 30 days; 0 disables the garbage collector.
+            cfg.gc_interval_s = @min(std.fmt.parseInt(u64, trimmed_value, 10) catch 3600, 2_592_000);
+        } else if (std.mem.eql(u8, key, "PH_GC_LOGS_MAX_AGE")) {
+            cfg.gc_logs_max_age_s = @min(std.fmt.parseInt(u64, trimmed_value, 10) catch 604_800, 2_592_000);
         } else if (std.mem.eql(u8, key, "factory.autotok") or std.mem.eql(u8, key, "PH_FACTORY_AUTOTOK")) {
             if (cfg.factory_autotok) |v| allocator.free(v);
             cfg.factory_autotok = try allocator.dupe(u8, trimmed_value);

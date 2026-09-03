@@ -1,4 +1,18 @@
 
+## [Unreleased]
+
+### Features
+
+- garbage collector: remove old revisions (keep 0, stable and running), their objects and stale logs
+- configurable via PH_GC_INTERVAL / PH_GC_LOGS_MAX_AGE and the device.json gc block
+
+### Bug Fixes
+
+- keep the daemon alive through Pantahub outages (retry login, skip api cycles, still gc)
+- default build/test optimize to ReleaseSafe (-Doptimize still overrides)
+- fix local_store inline test for the 0.15 ArrayList API and run it in CI
+
+
 ## [v0.2.0] - 2026-08-11
 
 ### Features

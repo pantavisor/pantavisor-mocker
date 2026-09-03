@@ -5,6 +5,7 @@ const config = @import("config.zig");
 const constants = @import("constants.zig");
 const logger = @import("logger.zig");
 const validation = @import("validation.zig");
+const gc = @import("gc.zig");
 
 const ContainerInfo = struct {
     name: []const u8,
@@ -342,7 +343,19 @@ pub const PvControlServer = struct {
         }
 
         try std.fs.cwd().rename(tmp_path, final_path);
+        self.tagUploadedObject(sha);
         try self.writeSimpleResponse(stream, 200, "OK", "application/json", "{\"status\":\"ok\"}");
+    }
+
+    /// Tag an uploaded object to the running revision so the garbage collector
+    /// keeps it. Best-effort: failure only makes the object a GC candidate.
+    fn tagUploadedObject(self: *PvControlServer, sha: []const u8) void {
+        var store = local_store.LocalStore.init_view(self.allocator, self.context.storage_path) catch return;
+        defer store.deinit();
+        const revs = store.get_revisions() catch return;
+        defer self.allocator.free(revs.rev);
+        defer self.allocator.free(revs.try_rev);
+        gc.appendObjectToManifest(self.allocator, &store, revs.try_rev, sha) catch {};
     }
 
     fn dispatch(self: *PvControlServer, req: http_parser.HttpRequest) !http_parser.HttpResponse {

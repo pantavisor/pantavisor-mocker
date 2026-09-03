@@ -347,8 +347,8 @@ test "local_store revision" {
     defer allocator.free(revs.rev);
     defer allocator.free(revs.try_rev);
 
-    var json_buf = std.ArrayList(u8).init(allocator);
-    defer json_buf.deinit();
+    var json_buf = std.ArrayList(u8){};
+    defer json_buf.deinit(allocator);
     try json_buf.writer(allocator).print("{f}", .{std.json.fmt(revs, .{})});
     try std.fs.cwd().writeFile(.{ .sub_path = test_base ++ "/revision-info.json", .data = json_buf.items });
 

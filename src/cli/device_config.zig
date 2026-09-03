@@ -18,11 +18,17 @@ pub const DeviceJsonSchema = struct {
     @"device-meta": ?std.json.Value = null,
     automation: ?std.json.Value = null,
     intervals: DeviceIntervals = .{},
+    gc: DeviceGc = .{},
 };
 
 pub const DeviceIntervals = struct {
     devmeta: ?u32 = null,
     usrmeta: ?u32 = null,
+};
+
+pub const DeviceGc = struct {
+    interval: ?u32 = null,
+    logs_max_age: ?u32 = null,
 };
 
 pub const Overrides = struct {
@@ -94,6 +100,12 @@ fn applyPantahubConfig(
     }
     if (cfg.intervals.usrmeta) |secs| {
         try store.save_config_value("PH_METADATA_USRMETA_INTERVAL", try std.fmt.bufPrint(&buf, "{d}", .{secs}));
+    }
+    if (cfg.gc.interval) |secs| {
+        try store.save_config_value("PH_GC_INTERVAL", try std.fmt.bufPrint(&buf, "{d}", .{secs}));
+    }
+    if (cfg.gc.logs_max_age) |secs| {
+        try store.save_config_value("PH_GC_LOGS_MAX_AGE", try std.fmt.bufPrint(&buf, "{d}", .{secs}));
     }
 }
 

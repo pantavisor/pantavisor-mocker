@@ -5,6 +5,7 @@ const client_mod = @import("../net/client.zig");
 const config_mod = @import("../core/config.zig");
 const constants = @import("../core/constants.zig");
 const business_logic = @import("../core/business_logic.zig");
+const gc = @import("../core/gc.zig");
 
 /// SHA256 cache entry: stores the hash and the file modification time
 const Sha256CacheEntry = struct {
@@ -332,6 +333,15 @@ fn process_step(
             }
         }
     }
+
+    // Record which objects this revision needs, so the garbage collector can
+    // free objects only referenced by deleted revisions (see core/gc.zig).
+    var manifest_ids = std.ArrayList([]const u8){};
+    defer manifest_ids.deinit(allocator);
+    for (objects) |obj| {
+        if (business_logic.isValidSha256(obj.id)) try manifest_ids.append(allocator, obj.id);
+    }
+    try gc.writeObjectsManifest(allocator, store, rev_str, manifest_ids.items);
 
     // 3. INPROGRESS
     const ip_progress = client_mod.StepProgress{ .status = client_mod.UpdateStatus.INPROGRESS.toString(), .progress = constants.PROGRESS_DOWNLOADED, .@"status-msg" = "Update objects downloaded" };
