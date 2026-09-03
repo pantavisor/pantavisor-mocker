@@ -1,10 +1,13 @@
 
 ## [Unreleased]
 
+## [v0.3.0] - 2026-09-03
+
 ### Features
 
 - garbage collector: remove old revisions (keep 0, stable and running), their objects and stale logs
 - configurable via PH_GC_INTERVAL / PH_GC_LOGS_MAX_AGE and the device.json gc block
+- add `version` and `--version` CLI commands
 
 ### Bug Fixes
 
@@ -49,4 +52,5 @@
 - project review — fix leaks/perf, add CI and tests
 
 
+[v0.3.0]: https://github.com/pantavisor/pantavisor-mocker/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/pantavisor/pantavisor-mocker/compare/v0.1.0...v0.2.0
