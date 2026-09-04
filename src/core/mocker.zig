@@ -649,7 +649,6 @@ fn check_and_process_claim(
             if (parsed.value.object.get("owner")) |owner_val| {
                 if (owner_val == .string and owner_val.string.len > 0) {
                     log.log("Device CLAIMED by {s}! Initializing cloud state...", .{owner_val.string});
-                    try cfg.set_claimed(store.*, true);
 
                     // After the device was claimed, we need to do login again to refresh the token
                     log.log("Refreshing token after claim...", .{});
@@ -667,13 +666,21 @@ fn check_and_process_claim(
                         try client.sendMessage(.logger, .subsystem_init, .{ .object = map });
                     }
 
-                    // do syncing process
-                    try ph_client.create_trail(boot_state);
+                    // do syncing process. A device onboarded through a token
+                    // with pending owner verification (manual/tls) only holds
+                    // read-only credentials and gets 403 here; stay unclaimed
+                    // so the bootstrap is retried every cycle until the owner
+                    // accepts the device.
+                    ph_client.create_trail(boot_state) catch |err| {
+                        log.log("Trail creation failed ({any}); owner verification may still be pending, retrying next cycle", .{err});
+                        return err;
+                    };
                     try ph_client.post_progress(cfg.creds_prn.?, 0, .{ // Use default value
                         .status = client_mod.UpdateStatus.DONE.toString(),
                         .progress = 100,
                         .@"status-msg" = "Bootstrap complete",
                     });
+                    try cfg.set_claimed(store.*, true);
                     log.log("Cloud bootstrap complete.", .{});
                 }
             }
