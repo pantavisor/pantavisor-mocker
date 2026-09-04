@@ -41,6 +41,14 @@ pub fn build(b: *std.Build) void {
     exe.linkLibC();
     exe.linkSystemLibrary("curl");
 
+    // Cross-compiling against system libcurl: Debian multiarch installs the
+    // target arch's headers/libs under /usr/include/<triplet> and
+    // /usr/lib/<triplet>; point zig at them for -Dtarget=... cross builds.
+    const cross_include_dir = b.option([]const u8, "cross-include-dir", "Target-arch C header dir (e.g. /usr/include/aarch64-linux-gnu)");
+    const cross_lib_dir = b.option([]const u8, "cross-lib-dir", "Target-arch library dir (e.g. /usr/lib/aarch64-linux-gnu)");
+    if (cross_include_dir) |dir| exe.root_module.addIncludePath(.{ .cwd_relative = dir });
+    if (cross_lib_dir) |dir| exe.root_module.addLibraryPath(.{ .cwd_relative = dir });
+
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

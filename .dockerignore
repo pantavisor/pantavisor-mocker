@@ -3,3 +3,5 @@ storage
 .zig-cache
 zig-out
 build
+zig-cache/
+tmp_e2e_*

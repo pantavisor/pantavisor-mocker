@@ -6,16 +6,24 @@ ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 WORKDIR /app
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-	curl \
-	xz-utils \
-	make \
-	build-essential \
-	ca-certificates \
-	libcurl4 \
-	libcurl4-openssl-dev \
-	&& rm -rf /var/lib/apt/lists/*
+# Install build dependencies, plus the TARGET arch's libcurl (Debian
+# multiarch) so zig can cross-link libcurl for the target platform.
+RUN set -eux; \
+	case "${TARGETPLATFORM}" in \
+		linux/arm64)  CROSS=":arm64" ;; \
+		linux/arm/v7) CROSS=":armhf" ;; \
+		*)            CROSS="" ;; \
+	esac; \
+	if [ -n "$CROSS" ]; then dpkg --add-architecture "${CROSS#:}"; fi; \
+	apt-get update; \
+	apt-get install -y --no-install-recommends \
+		curl \
+		xz-utils \
+		make \
+		build-essential \
+		ca-certificates \
+		"libcurl4-openssl-dev$CROSS"; \
+	rm -rf /var/lib/apt/lists/*
 
 # Install Zig 0.15.2 autonomously based on BUILDPLATFORM
 RUN case "${BUILDPLATFORM}" in \
@@ -38,7 +46,26 @@ WORKDIR /app
 # Copy project files
 COPY . .
 
-RUN zig build --release=safe -Doptimize=ReleaseSafe
+# Cross-compile for TARGETPLATFORM; zig itself runs natively on BUILDPLATFORM.
+# The .2.36 suffix pins glibc to bookworm so binaries run on the runtime image
+# and similar-era distros (zig's default would be its newest bundled glibc).
+RUN set -eux; \
+	case "${TARGETPLATFORM}" in \
+		linux/arm64)  TRIPLET="aarch64-linux-gnu" ;; \
+		linux/arm/v7) TRIPLET="arm-linux-gnueabihf" ;; \
+		*)            TRIPLET="" ;; \
+	esac; \
+	EXTRA=""; \
+	if [ -n "$TRIPLET" ] && [ -d "/usr/lib/$TRIPLET" ]; then \
+		EXTRA="-Dtarget=$TRIPLET.2.36 -Dcross-include-dir=/usr/include/$TRIPLET -Dcross-lib-dir=/usr/lib/$TRIPLET"; \
+	fi; \
+	zig build --release=safe -Doptimize=ReleaseSafe $EXTRA
+
+# --- Export Stage ---
+# Bare binary for release assets, extracted with:
+#   docker buildx build --target export --platform linux/arm64 --output type=local,dest=dist .
+FROM scratch AS export
+COPY --from=builder /app/zig-out/bin/pantavisor-mocker /pantavisor-mocker
 
 # --- Runtime Stage ---
 FROM debian:bookworm-slim

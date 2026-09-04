@@ -39,10 +39,48 @@ jobs:
             type=ref,event=branch
             type=ref,event=tag
 
+      - name: Set up QEMU (multi-arch runtime stages)
+        uses: docker/setup-qemu-action@v3
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  # Cross-compile the release binary per arch through the Dockerfile's export
+  # stage (zig runs on the build platform — no QEMU) and attach it to the
+  # GitHub release created by a v* tag.
+  release-assets:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            asset: pantavisor-mocker-linux-amd64
+          - platform: linux/arm64
+            asset: pantavisor-mocker-linux-arm64
+          - platform: linux/arm/v7
+            asset: pantavisor-mocker-linux-armv7
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cross-compile ${{ matrix.platform }} binary
+        run: |
+          docker buildx build --target export --platform ${{ matrix.platform }} --output type=local,dest=dist .
+          mv dist/pantavisor-mocker ${{ matrix.asset }}
+
+      - name: Upload binary to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" "${{ matrix.asset }}"
