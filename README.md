@@ -95,7 +95,8 @@ The recommended way to configure a single device is one JSON file, applied with 
   },
   "automation": { "enabled": true, "update": { "done": 100 } },
   "intervals": { "devmeta": 10, "usrmeta": 10 },
-  "gc": { "interval": 3600, "logs_max_age": 604800 }
+  "gc": { "interval": 3600, "logs_max_age": 604800 },
+  "ownership": { "cert": "certs/cert.pem", "key": "certs/key.pem" }
 }
 ```
 
@@ -107,6 +108,7 @@ The recommended way to configure a single device is one JSON file, applied with 
 | `automation` | Auto-respond behavior for invitations/updates (see [Automation Configuration](#automation-configuration)) |
 | `intervals.devmeta` / `intervals.usrmeta` | Metadata sync intervals in seconds |
 | `gc.interval` / `gc.logs_max_age` | Garbage collector: run interval and log retention, in seconds (see [Garbage Collector](#garbage-collector)) |
+| `ownership.cert` / `ownership.key` | Optional TLS client cert/key (PEM) copied into `storage/ownership/`; paths are relative to the config file (see [TLS Ownership Configuration](#tls-ownership-configuration)) |
 
 ```bash
 # apply once, then start
@@ -117,7 +119,7 @@ pantavisor-mocker start -s my-device
 pantavisor-mocker start -s my-device -c device.json
 ```
 
-Re-applying is always safe: the registration credentials the device obtains (`PH_CREDS_PRN`/`PH_CREDS_SECRET`) are never touched, so the device keeps its identity. On `init`, the `--token/--host/--port` flags override the file's values.
+Re-applying is always safe: the registration credentials the device obtains (`PH_CREDS_PRN`/`PH_CREDS_SECRET`) are never touched, so the device keeps its identity. On `init`, the `--token/--host/--port` flags override the file's values, and `--cert/--key` override its `ownership` block.
 
 The rest of this section describes the files inside the storage directory that the device config writes for you — useful to understand or tweak a device by hand.
 
@@ -165,12 +167,21 @@ You can inject custom device metadata values by creating this JSON file.
 
 ### TLS Ownership Configuration
 
-To simulate a device that proves its ownership via TLS client certificates:
+To simulate a device that proves its ownership via TLS client certificates, the mocker needs the client certificate and private key (PEM) at `storage/ownership/cert.pem` and `storage/ownership/key.pem`. The mocker does not generate them; use a pair issued by the PKI Pantahub trusts for ownership validation. Any of these puts them in place:
 
-1. Create a directory named `ownership` inside your storage directory (e.g., `storage/ownership/`).
-2. Place your client certificate and private key in this directory:
-   - `storage/ownership/cert.pem`
-   - `storage/ownership/key.pem`
+```bash
+# init flags (both required together); copied into <storage>/ownership/
+pantavisor-mocker init -s my-device -t YOUR_AUTO_TOKEN --cert ./cert.pem --key ./key.pem
+
+# or an "ownership" block in device.json / swarm.json (paths relative to that file)
+#   "ownership": { "cert": "certs/cert.pem", "key": "certs/key.pem" }
+pantavisor-mocker init -s my-device -c device.json
+
+# or by hand
+mkdir -p my-device/ownership && cp cert.pem key.pem my-device/ownership/
+```
+
+In swarm mode the pair from `swarm.json` is copied into every device provisioned by `swarm generate-*`, `swarm run` and `swarm device`, so all devices of the fleet share the same cert. The key is installed with mode `0600`.
 
 When the mocker starts, if these files exist and the device has not yet been verified (indicated by `ovmode_status` in device metadata), the mocker will:
 1. Authenticate with Pantahub to obtain a temporary token.
@@ -195,6 +206,8 @@ docker run -d --name my-device \
 docker logs -f my-device
 ```
 
+For TLS ownership, mount the cert/key too and reference them from `device.json` with absolute container paths, e.g. `-v ${PWD}/ownership:/ownership:ro` and `"ownership": { "cert": "/ownership/cert.pem", "key": "/ownership/key.pem" }`.
+
 ### Swarm: one container per device (recommended)
 
 Each container runs `swarm device`: on first start it provisions **one** device from a shared [`swarm.json`](#swarm-mode-fleet-simulation) (picking a random model and, with `--channel random`, a random channel) and then runs it in the foreground. One device = one container = one log stream, and the fleet size is just the number of replicas.
@@ -208,6 +221,7 @@ services:
     command: ["swarm", "device", "-c", "/swarm.json", "--channel", "random"]
     volumes:
       - ./swarm.json:/swarm.json:ro
+      # - ./ownership:/ownership:ro   # TLS ownership cert.pem/key.pem (optional)
     restart: unless-stopped
     deploy:
       replicas: 5
@@ -223,6 +237,8 @@ docker compose down           # add -v to also discard the device identities
 ```
 
 Each container stores its device state in an anonymous per-container volume (`/app/storage`), so identities survive restarts and are dropped when the container is removed. The `generate` and `simulate` blocks of `swarm.json` are not used in this mode — replicas define the fleet.
+
+To validate TLS ownership, put `cert.pem`/`key.pem` in `./ownership/`, uncomment the mount, and add `"ownership": { "cert": "/ownership/cert.pem", "key": "/ownership/key.pem" }` to `swarm.json`; each device copies the pair into its storage on first start.
 
 ### Swarm: whole fleet in one container
 
@@ -242,6 +258,13 @@ docker logs -f my-swarm       # simulation manager output
 ## Running in Kubernetes
 
 Ready-to-apply manifests live in `examples/kubernetes/`. Both are driven by the same `swarm.json`, shipped as a ConfigMap. For real deployments move the `autojoin_token` into a Secret.
+
+For TLS ownership, ship the cert/key as a Secret and mount it at `/ownership` (both manifests carry a commented-out volume/mount for it), then add `"ownership": { "cert": "/ownership/cert.pem", "key": "/ownership/key.pem" }` to the `swarm.json` in the ConfigMap:
+
+```bash
+kubectl create secret generic pantavisor-mocker-ownership \
+  --from-file=cert.pem=./cert.pem --from-file=key.pem=./key.pem
+```
 
 ### One pod per device: `swarm-devices.yaml` (recommended)
 
@@ -305,8 +328,11 @@ pantavisor-mocker init --storage my_storage -c device.json
 
 # or with flags
 pantavisor-mocker init --storage my_storage --token YOUR_AUTO_TOKEN_HERE
+
+# with a TLS ownership cert/key (copied to my_storage/ownership/)
+pantavisor-mocker init --storage my_storage --token YOUR_AUTO_TOKEN_HERE --cert cert.pem --key key.pem
 ```
-*If `--storage` is omitted, it defaults to `./storage`. If `--token` is provided, it will be saved to the configuration for automatic registration. You can also skip `init` entirely: `start -c device.json` initializes the storage on first run.*
+*If `--storage` is omitted, it defaults to `./storage`. If `--token` is provided, it will be saved to the configuration for automatic registration. `--cert`/`--key` must be given together (see [TLS Ownership Configuration](#tls-ownership-configuration)). You can also skip `init` entirely: `start -c device.json` initializes the storage on first run.*
 
 #### 2. Configure Auto-Token (Manual)
 If you didn't provide a token during `init`, you can manually add your Pantahub Auto-Token to `my_storage/config/pantahub.config`:
@@ -568,6 +594,7 @@ pantavisor-mocker swarm init --dir my-fleet
 | `generate.appliances` / `generate.devices` | Generation counts used by `swarm run` and as the `--count` default |
 | `automation` | Automation block copied verbatim into each generated `mocker.json` (see Automation Configuration) |
 | `simulate.auto` / `simulate.headless` | Default simulation options used by `swarm run` |
+| `ownership.cert` / `ownership.key` | Optional TLS client cert/key (PEM), copied into every provisioned device's `ownership/`; paths are relative to the config file (see [TLS Ownership Configuration](#tls-ownership-configuration)) |
 
 **Legacy layout**: workspaces without `swarm.json` still load the old multi-file layout (`autojointoken.txt`, `group_key.txt`, `base.json`, `channels.json`, `models.txt`, `to_random_keys.txt`). When `swarm.json` exists it takes precedence and the legacy files are ignored. Use `swarm convert` to migrate.
 

@@ -77,6 +77,7 @@ pub const GenerateDevicesCmd = struct {
             try store.save_config_value("PH_CREDS_HOST", host);
             try store.save_config_value("PH_CREDS_PORT", port);
             try store.save_config_value("PH_FACTORY_AUTOTOK", ws.autojoin_token);
+            try ws.installOwnership(storage_path);
 
             // Build merged device-meta JSON
             const extra_pairs = [_][2][]const u8{
@@ -200,6 +201,7 @@ pub const GenerateAppliancesCmd = struct {
                     try store.save_config_value("PH_CREDS_HOST", host);
                     try store.save_config_value("PH_CREDS_PORT", port);
                     try store.save_config_value("PH_FACTORY_AUTOTOK", ws.autojoin_token);
+                    try ws.installOwnership(storage_path);
 
                     // Build merged device-meta JSON
                     const extra_pairs = [_][2][]const u8{

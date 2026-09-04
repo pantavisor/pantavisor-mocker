@@ -87,6 +87,12 @@ spec:
               mountPath: /workspace/swarm.json
               subPath: swarm.json
               readOnly: true
+            # TLS ownership (optional): Secret with cert.pem/key.pem (see
+            # swarm-devices.yaml) plus an "ownership" block in swarm.json
+            # pointing at /ownership/cert.pem and /ownership/key.pem.
+            # - name: ownership
+            #   mountPath: /ownership
+            #   readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -99,3 +105,7 @@ spec:
         - name: swarm-config
           configMap:
             name: pantavisor-mocker-swarm
+        # - name: ownership
+        #   secret:
+        #     secretName: pantavisor-mocker-ownership
+        #     defaultMode: 0400

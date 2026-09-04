@@ -14,6 +14,16 @@
 # their own — pods have no TTY. The "generate" and "simulate" blocks are not
 # used in this mode (replicas define the fleet size).
 #
+# TLS ownership (optional): create a Secret with the client cert/key
+#
+#   kubectl create secret generic pantavisor-mocker-ownership \
+#     --from-file=cert.pem=./cert.pem --from-file=key.pem=./key.pem
+#
+# then add to the swarm.json below
+#   "ownership": { "cert": "/ownership/cert.pem", "key": "/ownership/key.pem" }
+# and uncomment the ownership volume/mount. Every pod copies the pair into its storage on first
+# start and validates ownership against Pantahub.
+#
 # Alternative: swarm.yaml runs the whole fleet inside a single pod via tmux
 # (`swarm run --headless`) — fewer pods, but one shared log stream.
 ---
@@ -96,6 +106,9 @@ spec:
             - name: swarm-config
               mountPath: /config
               readOnly: true
+            # - name: ownership
+            #   mountPath: /ownership
+            #   readOnly: true
           resources:
             requests:
               cpu: 25m
@@ -106,6 +119,10 @@ spec:
         - name: swarm-config
           configMap:
             name: pantavisor-mocker-swarm-devices
+        # - name: ownership
+        #   secret:
+        #     secretName: pantavisor-mocker-ownership
+        #     defaultMode: 0400
   volumeClaimTemplates:
     - metadata:
         name: storage

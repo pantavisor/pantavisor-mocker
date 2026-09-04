@@ -800,8 +800,13 @@ fn check_tls_ownership(
         } else |_| {}
 
         if (!is_verified) {
+            // Registration/login may have failed this cycle (offline); the
+            // validation call needs both the PRN and a session token.
+            if (cfg.creds_prn == null or ph_client.token == null) {
+                log.log("Device not registered/logged in yet; skipping TLS ownership validation this cycle.", .{});
+                return;
+            }
             log.log("Device not verified. Attempting TLS ownership validation...", .{});
-            // We are already logged in above.
             if (try ph_client.validate_ownership(cfg.creds_prn.?, cfg.client_cert.?, cfg.client_key.?)) {
                 log.log("TLS Ownership Validation SUCCESS!", .{});
 

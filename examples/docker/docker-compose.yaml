@@ -13,12 +13,20 @@
 # Put your swarm.json next to this file (see ../kubernetes/swarm.yaml or
 # `pantavisor-mocker swarm init` for the schema). Enable "automation" in it so
 # devices answer invitations/updates on their own — there is no TTY here.
+#
+# TLS ownership (optional): put the client cert/key in ./ownership/ and add to
+# swarm.json
+#   "ownership": { "cert": "/ownership/cert.pem", "key": "/ownership/key.pem" }
+# Every device copies the pair into its storage on first start and validates
+# ownership against Pantahub. Relative paths resolve against the directory of
+# the swarm.json inside the container (/), so absolute paths are clearer here.
 services:
   device:
     image: ghcr.io/pantavisor/pantavisor-mocker:latest
     command: ["swarm", "device", "-c", "/swarm.json", "--channel", "random"]
     volumes:
       - ./swarm.json:/swarm.json:ro
+      # - ./ownership:/ownership:ro
     # Device state lands in /app/storage (a VOLUME of the image), so each
     # container gets its own anonymous volume: identity survives restarts,
     # and is discarded when the container is removed.

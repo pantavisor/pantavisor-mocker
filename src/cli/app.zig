@@ -49,6 +49,7 @@ pub fn printHelp(exe_name: []const u8) void {
 
 test {
     _ = @import("framework.zig");
+    _ = @import("../core/ownership.zig");
     _ = @import("swarm_workspace.zig");
     _ = @import("device_config.zig");
     _ = @import("swarm_device.zig");
@@ -60,6 +61,14 @@ test "parse init" {
     try std.testing.expect(result == .init);
     try std.testing.expectEqualStrings("abc", result.init.token.?);
     try std.testing.expectEqualStrings("p.com", result.init.host.?);
+}
+
+test "parse init cert/key" {
+    const args = &[_][]const u8{ "exe", "init", "--cert", "/c.pem", "--key", "/k.pem" };
+    const result = try parse(std.testing.allocator, args);
+    try std.testing.expect(result == .init);
+    try std.testing.expectEqualStrings("/c.pem", result.init.cert.?);
+    try std.testing.expectEqualStrings("/k.pem", result.init.key.?);
 }
 
 test "parse version" {

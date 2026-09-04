@@ -1,6 +1,7 @@
 const std = @import("std");
 const local_store = @import("../core/local_store.zig");
 const swarm_workspace = @import("swarm_workspace.zig");
+const ownership = @import("../core/ownership.zig");
 
 /// Schema of a single-device config file (the individual-device counterpart
 /// of swarm.json): everything one mocker needs in one JSON — Pantahub
@@ -11,14 +12,19 @@ const swarm_workspace = @import("swarm_workspace.zig");
 ///   "pantahub": { "host": "api.pantahub.com", "port": "443", "autojoin_token": "..." },
 ///   "device-meta": { "pantavisor.arch": "aarch64/64/EL" },
 ///   "automation": { "enabled": true, "update": { "done": 100 } },
-///   "intervals": { "devmeta": 10, "usrmeta": 10 }
+///   "intervals": { "devmeta": 10, "usrmeta": 10 },
+///   "ownership": { "cert": "certs/cert.pem", "key": "certs/key.pem" }
 /// }
+///
+/// Ownership paths are relative to the config file's directory; the pair is
+/// copied into <storage>/ownership/{cert,key}.pem.
 pub const DeviceJsonSchema = struct {
     pantahub: swarm_workspace.PantahubConfig = .{},
     @"device-meta": ?std.json.Value = null,
     automation: ?std.json.Value = null,
     intervals: DeviceIntervals = .{},
     gc: DeviceGc = .{},
+    ownership: ownership.Config = .{},
 };
 
 pub const DeviceIntervals = struct {
@@ -72,6 +78,7 @@ pub fn apply(
 
     try applyPantahubConfig(allocator, &store, cfg, overrides, token);
     try applyMockerJson(allocator, storage_path, cfg);
+    try ownership.installFromConfig(allocator, storage_path, ownership.configDir(config_path), cfg.ownership, config_path);
 }
 
 fn applyPantahubConfig(
@@ -141,10 +148,14 @@ test "apply device config scaffolds storage" {
         \\  "pantahub": { "host": "api.example.com", "port": 12365, "autojoin_token": "DEVTOK" },
         \\  "device-meta": { "pantavisor.arch": "aarch64/64/EL", "custom.key": "v1" },
         \\  "automation": { "enabled": true, "update": { "done": 100 } },
-        \\  "intervals": { "devmeta": 30, "usrmeta": 60 }
+        \\  "intervals": { "devmeta": 30, "usrmeta": 60 },
+        \\  "ownership": { "cert": "certs/c.pem", "key": "certs/k.pem" }
         \\}
     ;
     try std.fs.cwd().writeFile(.{ .sub_path = test_dir ++ "/device.json", .data = device_json });
+    try std.fs.cwd().makePath(test_dir ++ "/certs");
+    try std.fs.cwd().writeFile(.{ .sub_path = test_dir ++ "/certs/c.pem", .data = "CERT" });
+    try std.fs.cwd().writeFile(.{ .sub_path = test_dir ++ "/certs/k.pem", .data = "KEY" });
 
     try apply(allocator, test_dir ++ "/storage", test_dir ++ "/device.json", .{});
 
@@ -162,6 +173,14 @@ test "apply device config scaffolds storage" {
     defer parsed.deinit();
     try std.testing.expect(parsed.value.object.get("automation").?.object.get("enabled").?.bool);
     try std.testing.expectEqualStrings("v1", parsed.value.object.get("device-meta").?.object.get("custom.key").?.string);
+
+    // ownership pair copied into storage, paths resolved relative to device.json
+    const cert = try std.fs.cwd().readFileAlloc(allocator, test_dir ++ "/storage/ownership/cert.pem", 64);
+    defer allocator.free(cert);
+    try std.testing.expectEqualStrings("CERT", cert);
+    const key = try std.fs.cwd().readFileAlloc(allocator, test_dir ++ "/storage/ownership/key.pem", 64);
+    defer allocator.free(key);
+    try std.testing.expectEqualStrings("KEY", key);
 
     // CLI overrides win over file values, re-apply is safe
     try apply(allocator, test_dir ++ "/storage", test_dir ++ "/device.json", .{ .host = "other.example.com" });

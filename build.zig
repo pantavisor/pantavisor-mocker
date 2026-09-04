@@ -68,15 +68,24 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    // The curl shim belongs to the app module itself so every test binary that
+    // imports it (runner below, and the app's own tests) links it exactly once.
+    app_mod.addCSourceFile(.{ .file = b.path("src/net/curl_shim.c") });
+    app_mod.link_libc = true;
+    app_mod.linkSystemLibrary("curl", .{});
     exe_unit_tests.root_module.addImport("app", app_mod);
-    exe_unit_tests.addCSourceFile(.{ .file = b.path("src/net/curl_shim.c") });
-    exe_unit_tests.linkLibC();
-    exe_unit_tests.linkSystemLibrary("curl");
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
+    // Tests declared inside src/ live in the "app" module; Zig only collects
+    // tests from a test compilation's root module, so they need their own
+    // test binary rooted at src/main.zig.
+    const app_unit_tests = b.addTest(.{ .root_module = app_mod });
+    const run_app_unit_tests = b.addRunArtifact(app_unit_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+    test_step.dependOn(&run_app_unit_tests.step);
 
     // End-to-end tests: spawn the REAL binary and drive it from the outside
     // (CLI, storage dir, pv-ctrl socket, mock pantahub). No app code is linked

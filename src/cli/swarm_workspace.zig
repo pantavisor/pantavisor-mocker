@@ -1,4 +1,5 @@
 const std = @import("std");
+const ownership = @import("../core/ownership.zig");
 
 pub const SWARM_JSON_NAME = "swarm.json";
 
@@ -31,6 +32,7 @@ pub const SwarmJsonSchema = struct {
     generate: GenerateConfig = .{},
     automation: ?std.json.Value = null,
     simulate: SimulateConfig = .{},
+    ownership: ownership.Config = .{},
 };
 
 pub const SwarmWorkspace = struct {
@@ -47,6 +49,9 @@ pub const SwarmWorkspace = struct {
     automation_json: ?[]const u8,
     generate: GenerateConfig,
     simulate: SimulateConfig,
+    /// TLS ownership cert/key (resolved paths) copied into every provisioned device, if configured.
+    ownership_cert: ?[]const u8,
+    ownership_key: ?[]const u8,
 
     /// Load workspace configuration. Prefers a single swarm.json file;
     /// falls back to the legacy multi-file layout (autojointoken.txt,
@@ -90,6 +95,8 @@ pub const SwarmWorkspace = struct {
             .automation_json = null,
             .generate = .{},
             .simulate = .{},
+            .ownership_cert = null,
+            .ownership_key = null,
         };
     }
 
@@ -126,6 +133,12 @@ pub const SwarmWorkspace = struct {
         try dupeStrings(allocator, &ws.random_keys, cfg.random_keys orelse &.{});
         ws.generate = cfg.generate;
         ws.simulate = cfg.simulate;
+        if (try cfg.ownership.validate(name)) {
+            // Relative paths are resolved against the config file's directory.
+            const cfg_dir = if (std.fs.path.isAbsolute(name)) ownership.configDir(name) else dir;
+            ws.ownership_cert = try ownership.resolve(allocator, cfg_dir, cfg.ownership.cert.?);
+            ws.ownership_key = try ownership.resolve(allocator, cfg_dir, cfg.ownership.key.?);
+        }
         return ws;
     }
 
@@ -167,6 +180,8 @@ pub const SwarmWorkspace = struct {
         if (self.host) |h| self.allocator.free(h);
         if (self.port) |p| self.allocator.free(p);
         if (self.automation_json) |a| self.allocator.free(a);
+        if (self.ownership_cert) |c| self.allocator.free(c);
+        if (self.ownership_key) |k| self.allocator.free(k);
         for (self.models.items) |m| {
             self.allocator.free(m);
         }
@@ -175,6 +190,13 @@ pub const SwarmWorkspace = struct {
             self.allocator.free(key);
         }
         self.random_keys.deinit(self.allocator);
+    }
+
+    /// Copy the configured TLS ownership pair into a device storage (no-op if unset).
+    pub fn installOwnership(self: SwarmWorkspace, storage_path: []const u8) !void {
+        if (self.ownership_cert) |cert| {
+            try ownership.install(self.allocator, storage_path, cert, self.ownership_key.?);
+        }
     }
 
     pub fn readChannelsJson(self: SwarmWorkspace) !std.json.Parsed(std.json.Value) {
@@ -525,13 +547,17 @@ test "swarm.json workspace parsing" {
         \\  "models": ["Model A", "Model B"],
         \\  "generate": { "appliances": 2, "devices": 3 },
         \\  "automation": { "enabled": true, "update": { "done": 100 } },
-        \\  "simulate": { "auto": true, "headless": true }
+        \\  "simulate": { "auto": true, "headless": true },
+        \\  "ownership": { "cert": "certs/c.pem", "key": "/abs/k.pem" }
         \\}
     ;
     try std.fs.cwd().writeFile(.{ .sub_path = test_dir ++ "/swarm.json", .data = swarm_json });
 
     var ws = try SwarmWorkspace.init(allocator, test_dir);
     defer ws.deinit();
+
+    try std.testing.expectEqualStrings(test_dir ++ "/certs/c.pem", ws.ownership_cert.?);
+    try std.testing.expectEqualStrings("/abs/k.pem", ws.ownership_key.?);
 
     try std.testing.expectEqualStrings("TOK123", ws.autojoin_token);
     try std.testing.expectEqualStrings("grp.key", ws.group_key);
@@ -574,6 +600,16 @@ test "named config file loads instead of swarm.json" {
 
     // Explicitly named but missing config is an error, no legacy fallback
     try std.testing.expectError(error.FileNotFound, SwarmWorkspace.initWithConfig(allocator, test_dir, "nope.json"));
+}
+
+test "swarm.json ownership needs both cert and key" {
+    const allocator = std.testing.allocator;
+    const test_dir = "swarm_ws_test_owner";
+    std.fs.cwd().makePath(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    try std.fs.cwd().writeFile(.{ .sub_path = test_dir ++ "/swarm.json", .data = "{\"pantahub\":{\"autojoin_token\":\"T\"},\"ownership\":{\"cert\":\"c.pem\"}}" });
+    try std.testing.expectError(error.InvalidOwnershipConfig, SwarmWorkspace.init(allocator, test_dir));
 }
 
 test "swarm.json missing token is rejected" {

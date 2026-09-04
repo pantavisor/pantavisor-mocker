@@ -123,6 +123,7 @@ pub const SwarmDeviceCmd = struct {
         try store.save_config_value("PH_CREDS_HOST", ws.host orelse "api.pantahub.com");
         try store.save_config_value("PH_CREDS_PORT", ws.port orelse "443");
         try store.save_config_value("PH_FACTORY_AUTOTOK", ws.autojoin_token);
+        try ws.installOwnership(storage_path);
 
         const extra_pairs = [_][2][]const u8{
             .{ "pantavisor.dtmodel", model },
@@ -157,10 +158,13 @@ test "swarm device provisioning" {
         \\  "base": { "pantavisor.arch": "aarch64/64/EL" },
         \\  "channels": { "CH1": { "policy": "green" } },
         \\  "models": ["Model A"],
-        \\  "automation": { "enabled": true }
+        \\  "automation": { "enabled": true },
+        \\  "ownership": { "cert": "c.pem", "key": "k.pem" }
         \\}
     ;
     try std.fs.cwd().writeFile(.{ .sub_path = test_dir ++ "/swarm.json", .data = swarm_json });
+    try std.fs.cwd().writeFile(.{ .sub_path = test_dir ++ "/c.pem", .data = "CERT" });
+    try std.fs.cwd().writeFile(.{ .sub_path = test_dir ++ "/k.pem", .data = "KEY" });
 
     var ws = try swarm_workspace.SwarmWorkspace.initWithConfig(allocator, test_dir, "swarm.json");
     defer ws.deinit();
@@ -184,4 +188,11 @@ test "swarm device provisioning" {
     try std.testing.expectEqualStrings("Model A", dm.get("pantavisor.dtmodel").?.string);
     try std.testing.expect(dm.get("grp.key") != null);
     try std.testing.expect(parsed.value.object.get("automation").?.object.get("enabled").?.bool);
+
+    const cert = try std.fs.cwd().readFileAlloc(allocator, storage ++ "/ownership/cert.pem", 64);
+    defer allocator.free(cert);
+    try std.testing.expectEqualStrings("CERT", cert);
+    const key = try std.fs.cwd().readFileAlloc(allocator, storage ++ "/ownership/key.pem", 64);
+    defer allocator.free(key);
+    try std.testing.expectEqualStrings("KEY", key);
 }
