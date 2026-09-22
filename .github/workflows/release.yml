@@ -36,19 +36,19 @@ jobs:
             asset: pantavisor-mocker-linux-armv7
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Cross-compile ${{ matrix.platform }} binary
         run: |
           docker buildx build --target export --platform ${{ matrix.platform }} --output type=local,dest=dist .
           mv dist/pantavisor-mocker ${{ matrix.asset }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
@@ -66,14 +66,18 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
 
       - name: Install Zig 0.15.2
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
+        run: |
+          ZIG_ARCH=$([ "$(uname -m)" = arm64 ] && echo aarch64 || echo x86_64)
+          curl -fL "https://ziglang.org/download/0.15.2/zig-${ZIG_ARCH}-macos-0.15.2.tar.xz" -o zig.tar.xz
+          mkdir -p "$RUNNER_TEMP/zig" && tar -xJf zig.tar.xz --strip-components=1 -C "$RUNNER_TEMP/zig"
+          rm zig.tar.xz
+          echo "$RUNNER_TEMP/zig" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/zig/zig" version
 
       - name: Build (ReleaseSafe)
         run: zig build --release=safe -Doptimize=ReleaseSafe
@@ -86,7 +90,7 @@ jobs:
 
       - run: mv zig-out/bin/pantavisor-mocker ${{ matrix.asset }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
@@ -98,7 +102,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
