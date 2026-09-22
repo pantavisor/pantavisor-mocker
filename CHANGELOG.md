@@ -1,6 +1,20 @@
 
 ## [Unreleased]
 
+## [v0.4.0] - 2026-09-22
+
+### Features
+
+- `config` command generates a device.json (endpoint, token, automation and interval defaults)
+- TLS ownership cert/key provisioning for init (`--cert/--key`), device.json and swarm.json
+- release binaries for Linux (amd64, arm64, armv7) and macOS (arm64, amd64) with SHA256SUMS
+- multi-arch Docker images (amd64, arm64, armv7)
+
+### Bug Fixes
+
+- retry cloud bootstrap until the trail is created (owner verification pending)
+- macOS support: portable SIGINT/SIGTERM handling and system info
+
 ## [v0.3.0] - 2026-09-03
 
 ### Features
@@ -52,5 +66,6 @@
 - project review — fix leaks/perf, add CI and tests
 
 
+[v0.4.0]: https://github.com/pantavisor/pantavisor-mocker/compare/v0.3.0...v0.4.0
 [v0.3.0]: https://github.com/pantavisor/pantavisor-mocker/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/pantavisor/pantavisor-mocker/compare/v0.1.0...v0.2.0
