@@ -1,0 +1,122 @@
+name: Release
+
+# Build the CLI for every supported platform on a v* tag and attach the
+# binaries (plus SHA256SUMS) to the GitHub release. The release is created
+# with generated notes when it doesn't exist yet; a release drafted by hand
+# before tagging keeps its title and notes and just gets the assets.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)build and upload assets for
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  # Cross-compiled through the Dockerfile's export stage (zig runs natively on
+  # the runner, target-arch libcurl from Debian multiarch, glibc pinned to 2.36).
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            asset: pantavisor-mocker-linux-amd64
+          - platform: linux/arm64
+            asset: pantavisor-mocker-linux-arm64
+          - platform: linux/arm/v7
+            asset: pantavisor-mocker-linux-armv7
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cross-compile ${{ matrix.platform }} binary
+        run: |
+          docker buildx build --target export --platform ${{ matrix.platform }} --output type=local,dest=dist .
+          mv dist/pantavisor-mocker ${{ matrix.asset }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  # Built natively on each arch's runner, linking the macOS SDK's libcurl.
+  macos:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15
+            asset: pantavisor-mocker-macos-arm64
+          - runner: macos-15-intel
+            asset: pantavisor-mocker-macos-amd64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Install Zig 0.15.2
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build (ReleaseSafe)
+        run: zig build --release=safe -Doptimize=ReleaseSafe
+
+      - name: Smoke test
+        run: |
+          ./zig-out/bin/pantavisor-mocker version
+          ./zig-out/bin/pantavisor-mocker config -o smoke/device.json -t TOKEN
+          ./zig-out/bin/pantavisor-mocker init -s smoke/storage -c smoke/device.json
+
+      - run: mv zig-out/bin/pantavisor-mocker ${{ matrix.asset }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          chmod +x pantavisor-mocker-*
+          sha256sum pantavisor-mocker-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create release / upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --verify-tag --generate-notes --title "$TAG"
+          fi

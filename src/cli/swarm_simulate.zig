@@ -1,9 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("signal.h");
-    @cInclude("sys/signalfd.h");
-    @cInclude("unistd.h");
-});
+const signal_fd_mod = @import("../core/signal_fd.zig");
 
 var g_session_names: []const []const u8 = &.{};
 var g_cleanup_done = std.atomic.Value(bool).init(false);
@@ -291,18 +287,11 @@ pub const SwarmSimulateCmd = struct {
         g_session_names = name_ptrs;
         g_cleanup_done.store(false, .release);
 
-        var mask: c.sigset_t = undefined;
-        _ = c.sigemptyset(&mask);
-        _ = c.sigaddset(&mask, c.SIGINT);
-        _ = c.sigaddset(&mask, c.SIGTERM);
-        _ = c.pthread_sigmask(c.SIG_BLOCK, &mask, null);
-
-        const signal_fd = c.signalfd(-1, &mask, c.SFD_CLOEXEC);
-        if (signal_fd == -1) {
-            std.debug.print("Error creating signalfd\n", .{});
+        const signal_fd = signal_fd_mod.open() catch {
+            std.debug.print("Error creating signal fd\n", .{});
             return;
-        }
-        defer _ = c.close(signal_fd);
+        };
+        defer signal_fd_mod.close(signal_fd);
 
         const exe_path = try std.fs.selfExePathAlloc(allocator);
         defer allocator.free(exe_path);

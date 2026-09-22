@@ -7,42 +7,26 @@ const logger_subsystem = @import("../core/logger_subsystem.zig");
 const tui_renderer = @import("../ui/tui_renderer.zig");
 const stdinout_renderer = @import("../ui/stdinout_renderer.zig");
 const ipc = @import("../core/ipc.zig");
+const signal_fd = @import("../core/signal_fd.zig");
 const c = @cImport({
-    @cInclude("signal.h");
-    @cInclude("sys/signalfd.h");
-    @cInclude("unistd.h");
     @cInclude("poll.h");
 });
 
 const SignalWatcher = struct {
     thread: std.Thread,
     quit_flag: *std.atomic.Value(bool),
+    fd: c_int,
 
     fn init(quit_flag: *std.atomic.Value(bool)) !SignalWatcher {
-        // Block signals so the listener thread can catch them with signalfd
-        var mask: c.sigset_t = undefined;
-        _ = c.sigemptyset(&mask);
-        _ = c.sigaddset(&mask, c.SIGINT);
-        _ = c.sigaddset(&mask, c.SIGTERM);
-        _ = c.pthread_sigmask(c.SIG_BLOCK, &mask, null);
-
-        const thread = try std.Thread.spawn(.{}, run, .{quit_flag});
-        return .{ .thread = thread, .quit_flag = quit_flag };
+        // Opened on the calling thread: on Linux this blocks SIGINT/SIGTERM
+        // here so every thread spawned afterwards inherits the mask.
+        const fd = try signal_fd.open();
+        errdefer signal_fd.close(fd);
+        const thread = try std.Thread.spawn(.{}, run, .{ quit_flag, fd });
+        return .{ .thread = thread, .quit_flag = quit_flag, .fd = fd };
     }
 
-    fn run(quit_flag: *std.atomic.Value(bool)) void {
-        var mask: c.sigset_t = undefined;
-        _ = c.sigemptyset(&mask);
-        _ = c.sigaddset(&mask, c.SIGINT);
-        _ = c.sigaddset(&mask, c.SIGTERM);
-
-        const fd = c.signalfd(-1, &mask, c.SFD_CLOEXEC);
-        if (fd == -1) {
-            std.debug.print("SignalWatcher: failed to create signalfd\n", .{});
-            return;
-        }
-        defer _ = c.close(fd);
-
+    fn run(quit_flag: *std.atomic.Value(bool), fd: c_int) void {
         while (!quit_flag.load(.acquire)) {
             var fds = [1]c.struct_pollfd{.{
                 .fd = fd,
@@ -61,6 +45,7 @@ const SignalWatcher = struct {
 
     fn deinit(self: *SignalWatcher) void {
         self.thread.join();
+        signal_fd.close(self.fd);
     }
 };
 

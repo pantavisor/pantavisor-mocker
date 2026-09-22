@@ -41,3 +41,30 @@ jobs:
 
       - name: End-to-end tests (real binary)
         run: zig build e2e
+
+  # macOS release targets: build natively and smoke-test the binary so a
+  # Linux-only API slipping in fails here rather than at release time. The
+  # unit/e2e suites stay Linux-only.
+  build-macos:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    strategy:
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Zig 0.15.2
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build (ReleaseSafe)
+        run: zig build --release=safe -Doptimize=ReleaseSafe
+
+      - name: Smoke test
+        run: |
+          ./zig-out/bin/pantavisor-mocker version
+          ./zig-out/bin/pantavisor-mocker config -o smoke/device.json -t TOKEN
+          ./zig-out/bin/pantavisor-mocker init -s smoke/storage -c smoke/device.json

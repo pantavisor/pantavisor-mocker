@@ -291,6 +291,22 @@ Use this when you want the smallest footprint; use the StatefulSet when you want
 
 ## Build and Installation
 
+### Prebuilt binaries
+
+Every `v*` tag publishes binaries to the [GitHub release](https://github.com/pantavisor/pantavisor-mocker/releases), with a `SHA256SUMS` file:
+
+| Asset | Platform |
+|-------|----------|
+| `pantavisor-mocker-linux-amd64` / `-linux-arm64` / `-linux-armv7` | Linux (glibc ≥ 2.36), needs `libcurl4` |
+| `pantavisor-mocker-macos-arm64` / `-macos-amd64` | macOS (Apple silicon / Intel), uses the system libcurl |
+
+```bash
+curl -fLo pantavisor-mocker https://github.com/pantavisor/pantavisor-mocker/releases/latest/download/pantavisor-mocker-macos-arm64
+chmod +x pantavisor-mocker && mv pantavisor-mocker ~/.local/bin/
+```
+
+`swarm simulate`/`swarm run` also need `tmux` on the `PATH`. Windows is not supported.
+
 ### Prerequisites
 
 - **Zig Compiler**: Version **0.15.2** is strictly required.

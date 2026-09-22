@@ -28,6 +28,7 @@ pub const messages = @import("core/messages.zig");
 test {
     _ = @import("cli/app.zig");
     _ = @import("core/gc.zig");
+    _ = @import("core/signal_fd.zig");
     _ = @import("core/local_store.zig");
 }
 

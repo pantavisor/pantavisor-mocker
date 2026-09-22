@@ -55,8 +55,13 @@ const c = @cImport({
     @cInclude("netinet/in.h");
     @cInclude("arpa/inet.h");
     @cInclude("sys/statvfs.h");
-    @cInclude("sys/sysinfo.h");
     @cInclude("sys/time.h");
+    if (builtin.os.tag == .linux) {
+        @cInclude("sys/sysinfo.h");
+    } else {
+        @cInclude("stdlib.h");
+        @cInclude("sys/sysctl.h");
+    }
 });
 
 pub fn get_uname(allocator: std.mem.Allocator) !SysInfo.Uname {
@@ -110,6 +115,7 @@ pub fn get_storage(path: []const u8) !SysInfo.Storage {
 }
 
 pub fn get_sysinfo() !SysInfo.Info {
+    if (builtin.os.tag != .linux) return get_sysinfo_bsd();
     var si: c.struct_sysinfo = undefined;
     if (c.sysinfo(&si) != 0) return error.SysinfoFailed;
     std.debug.assert(si.uptime >= 0);
@@ -130,6 +136,49 @@ pub fn get_sysinfo() !SysInfo.Info {
         .totalram = si.totalram,
         .totalswap = si.totalswap,
         .uptime = si.uptime,
+    };
+}
+
+/// sysinfo(2) is Linux-only; on macOS/BSD fill the same shape from sysctl
+/// and getloadavg. Loads use sysinfo's 16-bit fixed point; fields with no
+/// cheap equivalent stay 0.
+fn get_sysinfo_bsd() !SysInfo.Info {
+    var total_ram: u64 = 0;
+    var len: usize = @sizeOf(u64);
+    if (c.sysctlbyname("hw.memsize", &total_ram, &len, null, 0) != 0) return error.SysinfoFailed;
+
+    var page_size: u64 = 0;
+    len = @sizeOf(u64);
+    _ = c.sysctlbyname("hw.pagesize", &page_size, &len, null, 0);
+    var free_pages: u32 = 0;
+    len = @sizeOf(u32);
+    _ = c.sysctlbyname("vm.page_free_count", &free_pages, &len, null, 0);
+
+    var boot: c.struct_timeval = undefined;
+    len = @sizeOf(c.struct_timeval);
+    var uptime: i64 = 0;
+    if (c.sysctlbyname("kern.boottime", &boot, &len, null, 0) == 0) {
+        uptime = @max(0, std.time.timestamp() - @as(i64, boot.tv_sec));
+    }
+
+    var loads = [3]f64{ 0, 0, 0 };
+    _ = c.getloadavg(&loads, 3);
+
+    return .{
+        .bufferram = 0,
+        .freehigh = 0,
+        .freeram = @as(u64, free_pages) * page_size,
+        .freeswap = 0,
+        .@"loads.0" = @intFromFloat(loads[0] * 65536.0),
+        .@"loads.1" = @intFromFloat(loads[1] * 65536.0),
+        .@"loads.2" = @intFromFloat(loads[2] * 65536.0),
+        .mem_unit = 1,
+        .procs = 0,
+        .sharedram = 0,
+        .totalhigh = 0,
+        .totalram = total_ram,
+        .totalswap = 0,
+        .uptime = uptime,
     };
 }
 
@@ -182,6 +231,7 @@ pub fn get_interfaces(allocator: std.mem.Allocator) ![]const u8 {
 
         // Filter out non-physical interfaces
         if (std.mem.eql(u8, name, "lo") or
+            std.mem.eql(u8, name, "lo0") or
             std.mem.startsWith(u8, name, "br-") or
             std.mem.startsWith(u8, name, "veth") or
             std.mem.eql(u8, name, "docker0") or
