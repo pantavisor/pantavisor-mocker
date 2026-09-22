@@ -1,9 +1,15 @@
 
 ## [Unreleased]
 
+## [v0.5.0] - 2026-09-22
+
 ### Features
 
 - `doctor` command: checks libcurl/TLS, tmux, curl, device config, storage and Pantahub connectivity, with fix hints
+
+### Maintenance
+
+- CI: GitHub Actions moved to their Node 24 majors; Docker image build sets up buildx for multi-platform images
 
 ## [v0.4.0] - 2026-09-22
 
@@ -70,6 +76,7 @@
 - project review — fix leaks/perf, add CI and tests
 
 
+[v0.5.0]: https://github.com/pantavisor/pantavisor-mocker/compare/v0.4.0...v0.5.0
 [v0.4.0]: https://github.com/pantavisor/pantavisor-mocker/compare/v0.3.0...v0.4.0
 [v0.3.0]: https://github.com/pantavisor/pantavisor-mocker/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/pantavisor/pantavisor-mocker/compare/v0.1.0...v0.2.0

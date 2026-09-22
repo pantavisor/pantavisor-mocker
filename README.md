@@ -360,7 +360,25 @@ pantavisor-mocker doctor --offline                 # skip the network check
 | storage (`-s`, default `./storage` when present): writable, unix socket paths short enough, registered or has a token | fail / warning |
 | Pantahub reachable at the host/port from `--host/--port`, the config, the storage, else `api.pantahub.com:443` (TLS, DNS, CA certificates) | fail |
 
+```
+$ pantavisor-mocker doctor
+pantavisor-mocker 0.5.0 doctor (linux-x86_64)
+
+  [ ok ] libcurl 8.22.0 (OpenSSL/3.6.4), https supported
+  [ ok ] tmux 3.7c
+  [ ok ] curl 8.22.0
+  [ ok ] storage storage: socket paths fit (26/107 chars)
+  [ ok ] storage storage is writable
+  [ ok ] storage storage: registered as prn:::devices:/6a9ae8600686600009f0e957
+  [ ok ] storage storage: TLS ownership cert/key present
+  [ ok ] Pantahub https://api.pantahub.com:443/ reachable (HTTP 404)
+
+8 ok, 0 warning(s), 0 failure(s)
+```
+
 It exits with status 1 when a check fails; warnings don't change the exit status.
+
+> **Note:** libcurl is linked dynamically, so it must be installed before the binary can start at all. Without it, `doctor` can't run either and the system prints `error while loading shared libraries: libcurl.so.4`; install it with `apt install libcurl4` (it ships with macOS).
 
 
 #### 1. Initialize Storage
