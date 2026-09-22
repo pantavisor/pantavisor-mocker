@@ -341,6 +341,27 @@ Alternatively, add the output directory to your `PATH` in your `~/.bashrc` or `~
 export PATH="$PATH:$(pwd)/zig-out/bin"
 ```
 
+### 3. Check your setup: `doctor`
+
+`doctor` checks the runtime dependencies and your local setup, and says how to fix what's missing:
+
+```bash
+pantavisor-mocker doctor                           # deps + ./storage (if present) + Pantahub reachability
+pantavisor-mocker doctor -s my-device -c device.json
+pantavisor-mocker doctor --offline                 # skip the network check
+```
+
+| Check | Level if missing/broken |
+|-------|-------------------------|
+| libcurl with HTTPS/TLS support | fail |
+| `tmux` (for `swarm simulate` / `swarm run`) | warning |
+| `curl` CLI (for the `pvcontrol` helper script) | warning |
+| device config (`-c`): parses, autojoin token set, ownership cert/key files exist | fail / warning for the token |
+| storage (`-s`, default `./storage` when present): writable, unix socket paths short enough, registered or has a token | fail / warning |
+| Pantahub reachable at the host/port from `--host/--port`, the config, the storage, else `api.pantahub.com:443` (TLS, DNS, CA certificates) | fail |
+
+It exits with status 1 when a check fails; warnings don't change the exit status.
+
 
 #### 1. Initialize Storage
 Use the `init` command to create the necessary directory structure and default configuration — either from a [`device.json`](#one-file-device-config-devicejson) or with flags:

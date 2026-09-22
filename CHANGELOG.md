@@ -1,6 +1,10 @@
 
 ## [Unreleased]
 
+### Features
+
+- `doctor` command: checks libcurl/TLS, tmux, curl, device config, storage and Pantahub connectivity, with fix hints
+
 ## [v0.4.0] - 2026-09-22
 
 ### Features

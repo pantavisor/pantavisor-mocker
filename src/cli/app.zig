@@ -6,6 +6,7 @@ const init_mod = @import("init.zig");
 const start_mod = @import("start.zig");
 const swarm_mod = @import("swarm.zig");
 const config_mod = @import("config_init.zig");
+const doctor_mod = @import("doctor.zig");
 
 // --- Command Definitions ---
 
@@ -13,6 +14,7 @@ pub const InitCmd = init_mod.InitCmd;
 pub const StartCmd = start_mod.StartCmd;
 pub const SwarmCmd = swarm_mod.SwarmCmd;
 pub const ConfigCmd = config_mod.ConfigCmd;
+pub const DoctorCmd = doctor_mod.DoctorCmd;
 
 pub const VersionCmd = struct {
     pub const meta = .{ .description = "Print version information." };
@@ -24,6 +26,7 @@ pub const VersionCmd = struct {
 
 pub const Cli = union(enum) {
     config: ConfigCmd,
+    doctor: DoctorCmd,
     init: InitCmd,
     start: StartCmd,
     swarm: SwarmCmd,
@@ -56,6 +59,7 @@ test {
     _ = @import("swarm_workspace.zig");
     _ = @import("device_config.zig");
     _ = @import("config_init.zig");
+    _ = @import("doctor.zig");
     _ = @import("swarm_device.zig");
 }
 
@@ -82,6 +86,14 @@ test "parse config" {
     try std.testing.expectEqualStrings("d.json", result.config.output);
     try std.testing.expectEqualStrings("abc", result.config.token.?);
     try std.testing.expect(result.config.force);
+}
+
+test "parse doctor" {
+    const args = &[_][]const u8{ "exe", "doctor", "-s", "st", "--offline" };
+    const result = try parse(std.testing.allocator, args);
+    try std.testing.expect(result == .doctor);
+    try std.testing.expectEqualStrings("st", result.doctor.storage.?);
+    try std.testing.expect(result.doctor.offline);
 }
 
 test "parse version" {
