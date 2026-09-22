@@ -8,17 +8,10 @@ Everything is driven by single-file JSON configs: a [`device.json`](#one-file-de
 
 Get the binary (see [Build and Installation](#build-and-installation)) or use the Docker image `ghcr.io/pantavisor/pantavisor-mocker:latest`. You need a Pantahub **auto-join token** so devices can register themselves.
 
-**Simulate one device** — describe it in one JSON and start it:
+**Simulate one device** — generate its config and start it:
 
 ```bash
-cat > device.json <<'EOF'
-{
-  "pantahub": { "host": "api.pantahub.com", "port": "443", "autojoin_token": "YOUR_AUTO_TOKEN" },
-  "device-meta": { "pantavisor.dtmodel": "My Test Device" },
-  "automation": { "enabled": true }
-}
-EOF
-
+pantavisor-mocker config -t YOUR_AUTO_TOKEN   # writes device.json
 pantavisor-mocker start -s my-device -c device.json
 ```
 
@@ -79,7 +72,14 @@ Pantavisor Mocker specifically simulates the **Pantavisor Runtime** behavior reg
 
 ### One-file device config: `device.json`
 
-The recommended way to configure a single device is one JSON file, applied with `init -c` or `start -c`:
+The recommended way to configure a single device is one JSON file, applied with `init -c` or `start -c`. Generate a template with `config`:
+
+```bash
+pantavisor-mocker config                    # ./device.json with a placeholder token
+pantavisor-mocker config -t TOKEN --host api.example.com --port 443 -o lab/dev1.json
+```
+
+`config` writes the Pantahub endpoint and token, an empty `device-meta` `{}` for you to fill in, automation enabled (accept all invitations, mark all updates done) and 10s metadata sync intervals. It won't overwrite an existing file unless you pass `--force`. A filled-in config looks like this:
 
 ```json
 {
@@ -307,7 +307,13 @@ The executable will be generated in `zig-out/bin/pantavisor-mocker`.
 
 ### 2. Install globally (Optional)
 
-To use `pantavisor-mocker` from anywhere, move the binary to your local bin directory:
+To use `pantavisor-mocker` from anywhere, build and install it into `~/.local/bin` (added to your `PATH` if missing):
+
+```bash
+make install     # make uninstall removes it
+```
+
+Or copy the binary system-wide:
 
 ```bash
 sudo cp zig-out/bin/pantavisor-mocker /usr/local/bin/
@@ -323,7 +329,8 @@ export PATH="$PATH:$(pwd)/zig-out/bin"
 #### 1. Initialize Storage
 Use the `init` command to create the necessary directory structure and default configuration — either from a [`device.json`](#one-file-device-config-devicejson) or with flags:
 ```bash
-# from a device config file (recommended)
+# from a device config file (recommended); generate one with `config`
+pantavisor-mocker config -t YOUR_AUTO_TOKEN_HERE
 pantavisor-mocker init --storage my_storage -c device.json
 
 # or with flags
