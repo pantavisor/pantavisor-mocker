@@ -543,7 +543,7 @@ test "swarm.json workspace parsing" {
         \\  "group_key": "grp.key",
         \\  "random_keys": ["rand.one", "rand.two"],
         \\  "base": { "pantavisor.arch": "aarch64/64/EL" },
-        \\  "channels": { "CH1": { "policy": "green" } },
+        \\  "channels": { "CH1": { "policy": "prod" } },
         \\  "models": ["Model A", "Model B"],
         \\  "generate": { "appliances": 2, "devices": 3 },
         \\  "automation": { "enabled": true, "update": { "done": 100 } },
