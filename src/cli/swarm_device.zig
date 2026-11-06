@@ -156,7 +156,7 @@ test "swarm device provisioning" {
         \\  "pantahub": { "host": "api.example.com", "port": "443", "autojoin_token": "TOK" },
         \\  "group_key": "grp.key",
         \\  "base": { "pantavisor.arch": "aarch64/64/EL" },
-        \\  "channels": { "CH1": { "policy": "green" } },
+        \\  "channels": { "CH1": { "policy": "prod" } },
         \\  "models": ["Model A"],
         \\  "automation": { "enabled": true },
         \\  "ownership": { "cert": "c.pem", "key": "k.pem" }
@@ -184,7 +184,7 @@ test "swarm device provisioning" {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, mocker, .{});
     defer parsed.deinit();
     const dm = parsed.value.object.get("device-meta").?.object;
-    try std.testing.expectEqualStrings("green", dm.get("policy").?.string);
+    try std.testing.expectEqualStrings("prod", dm.get("policy").?.string);
     try std.testing.expectEqualStrings("Model A", dm.get("pantavisor.dtmodel").?.string);
     try std.testing.expect(dm.get("grp.key") != null);
     try std.testing.expect(parsed.value.object.get("automation").?.object.get("enabled").?.bool);
